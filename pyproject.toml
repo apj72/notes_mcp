@@ -1,0 +1,26 @@
+[project]
+name = "notes-mcp"
+version = "0.1.0"
+description = "MCP server for creating notes in Apple Notes"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.scripts]
+notes-mcp-server = "notes_mcp.server:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
