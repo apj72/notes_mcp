@@ -8,7 +8,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .security import get_auth_token
 
@@ -89,7 +89,7 @@ def create_job(
     # Build job payload
     job = {
         "job_id": str(uuid.uuid4()),
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "tool": "notes.create",
         "args": {
             "title": title,

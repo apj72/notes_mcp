@@ -8,7 +8,7 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,6 +31,9 @@ DEFAULT_POLL_SECONDS = 15
 DEFAULT_QUEUE_FILENAME = "queue.jsonl"
 DEFAULT_RESULTS_FILENAME = "results.jsonl"
 DEFAULT_DB_PATH = Path.home() / ".notes-mcp-queue" / "worker.sqlite3"
+DEFAULT_MAX_JOB_AGE_SECONDS = 24 * 60 * 60  # 24 hours
+MAX_PROCESSED_JOBS_TO_KEEP = 5000
+MAX_FOLDER_NAME_LENGTH = 200
 
 
 def get_github_token() -> Optional[str]:
@@ -252,15 +255,49 @@ def mark_job_processed(db_path: Path, job_id: str, status: str) -> None:
     Args:
         db_path: Path to SQLite database
         job_id: Job ID
-        status: Processing status ("ok", "denied", "error")
+        status: Processing status ("created", "denied", "error", "skipped_duplicate")
     """
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
             "INSERT OR REPLACE INTO processed_jobs (job_id, processed_at, status) VALUES (?, ?, ?)",
-            (job_id, datetime.utcnow().isoformat() + "Z", status),
+            (job_id, datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), status),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def cleanup_old_jobs(db_path: Path) -> None:
+    """
+    Clean up old processed job records to prevent unbounded growth.
+
+    Keeps the most recent MAX_PROCESSED_JOBS_TO_KEEP jobs.
+
+    Args:
+        db_path: Path to SQLite database
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        # Count total jobs
+        cursor = conn.execute("SELECT COUNT(*) FROM processed_jobs")
+        count = cursor.fetchone()[0]
+
+        if count > MAX_PROCESSED_JOBS_TO_KEEP:
+            # Delete oldest jobs, keeping the most recent MAX_PROCESSED_JOBS_TO_KEEP
+            to_delete = count - MAX_PROCESSED_JOBS_TO_KEEP
+            conn.execute(
+                """
+                DELETE FROM processed_jobs
+                WHERE job_id IN (
+                    SELECT job_id FROM processed_jobs
+                    ORDER BY processed_at ASC
+                    LIMIT ?
+                )
+            """,
+                (to_delete,),
+            )
+            conn.commit()
     finally:
         conn.close()
 
@@ -275,7 +312,15 @@ def validate_job_schema(job: dict[str, Any]) -> tuple[bool, Optional[str]]:
     Returns:
         Tuple of (valid, error_message)
     """
-    required_fields = ["job_id", "created_at", "tool", "args", "sig"]
+    # Check for job_id
+    if "job_id" not in job:
+        return False, "Missing required field: job_id"
+
+    job_id = job.get("job_id", "")
+    if not job_id or not isinstance(job_id, str):
+        return False, "Invalid or missing job_id"
+
+    required_fields = ["created_at", "tool", "args", "sig"]
     for field in required_fields:
         if field not in job:
             return False, f"Missing required field: {field}"
@@ -286,6 +331,54 @@ def validate_job_schema(job: dict[str, Any]) -> tuple[bool, Optional[str]]:
     args = job["args"]
     if "title" not in args or "body" not in args:
         return False, "Missing required args: title and body"
+
+    # Validate folder name length if present
+    if "folder" in args and args["folder"]:
+        folder_name = args["folder"]
+        if not isinstance(folder_name, str):
+            return False, "Folder name must be a string"
+        if len(folder_name) > MAX_FOLDER_NAME_LENGTH:
+            return False, f"Folder name exceeds maximum length of {MAX_FOLDER_NAME_LENGTH} characters"
+
+    return True, None
+
+
+def validate_job_age(job: dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """
+    Validate that job is not too old.
+
+    Args:
+        job: Job dictionary with 'created_at' field
+
+    Returns:
+        Tuple of (valid, error_message)
+    """
+    if "created_at" not in job:
+        return False, "Missing created_at field"
+
+    try:
+        created_at_str = job["created_at"]
+        # Parse ISO8601 timestamp
+        if created_at_str.endswith("Z"):
+            created_at_str = created_at_str[:-1] + "+00:00"
+        created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+
+        # Get max age from environment or use default
+        max_age_seconds = int(
+            os.environ.get("NOTES_MCP_MAX_JOB_AGE_SECONDS", DEFAULT_MAX_JOB_AGE_SECONDS)
+        )
+
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - created_at).total_seconds()
+
+        if age_seconds > max_age_seconds:
+            return False, f"Job is too old: {age_seconds / 3600:.1f} hours (max: {max_age_seconds / 3600:.1f} hours)"
+
+        if age_seconds < 0:
+            return False, "Job created_at is in the future"
+
+    except (ValueError, TypeError) as e:
+        return False, f"Invalid created_at format: {e}"
 
     return True, None
 
@@ -331,9 +424,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "RATE_LIMIT", "message": error or "Rate limit exceeded"},
+            "reason": error or "Rate limit exceeded",
         }
 
     # Validate title
@@ -350,9 +443,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "VALIDATION_ERROR", "message": error or "Invalid title"},
+            "reason": error or "Invalid title",
         }
 
     # Validate body
@@ -369,9 +462,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "VALIDATION_ERROR", "message": error or "Invalid body"},
+            "reason": error or "Invalid body",
         }
 
     # Check folder allowlist
@@ -388,9 +481,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "FOLDER_NOT_ALLOWED", "message": error_msg},
+            "reason": error_msg,
         }
 
     # Check confirmation requirement
@@ -407,9 +500,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "CONFIRMATION_REQUIRED", "message": error_msg},
+            "reason": error_msg,
         }
 
     # Validate account
@@ -426,9 +519,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "denied",
-            "error": {"code": "INVALID_ACCOUNT", "message": error_msg},
+            "reason": error_msg,
         }
 
     # Execute the note creation using existing internal function
@@ -451,9 +544,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "job_id": job_id,
-            "processed_at": datetime.utcnow().isoformat() + "Z",
+            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "status": "error",
-            "error": {"code": "EXECUTION_ERROR", "message": error_msg or "Failed to create note"},
+            "reason": error_msg or "Failed to create note",
         }
 
     # Success
@@ -468,8 +561,8 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "job_id": job_id,
-        "processed_at": datetime.utcnow().isoformat() + "Z",
-        "status": "ok",
+        "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "status": "created",
         "location": {
             "account": result["account"],
             "folder": result["folder"],
@@ -507,11 +600,17 @@ def process_queue() -> None:
     # Initialize state database
     init_state_db(db_path)
 
+    # Cleanup old jobs on startup
+    cleanup_old_jobs(db_path)
+
+    max_job_age = int(os.environ.get("NOTES_MCP_MAX_JOB_AGE_SECONDS", DEFAULT_MAX_JOB_AGE_SECONDS))
+
     print(f"Worker started. Polling every {poll_seconds} seconds.")
     print(f"Gist ID: {gist_id}")
     print(f"Queue file: {queue_filename}")
     print(f"Results file: {results_filename}")
     print(f"State DB: {db_path}")
+    print(f"Max job age: {max_job_age / 3600:.1f} hours")
 
     while True:
         try:
@@ -537,51 +636,108 @@ def process_queue() -> None:
                 if not line.strip():
                     continue
 
+                job_id = None
                 try:
                     job = json.loads(line)
+                    job_id = job.get("job_id")
                 except json.JSONDecodeError as e:
-                    print(f"Warning: Invalid JSON in queue: {e}")
+                    # Can't parse JSON, can't get job_id - skip silently
+                    print(f"Warning: Invalid JSON in queue (skipping line)")
+                    continue
+
+                # If no job_id, create a result for it
+                if not job_id:
+                    result_line = json.dumps(
+                        {
+                            "job_id": "unknown",
+                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "status": "denied",
+                            "reason": "Missing job_id field",
+                        }
+                    )
+                    results_to_append.append(result_line)
+                    continue
+
+                # Check if already processed (idempotency)
+                if is_job_processed(db_path, job_id):
+                    # Write skipped_duplicate result
+                    result_line = json.dumps(
+                        {
+                            "job_id": job_id,
+                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "status": "skipped_duplicate",
+                            "reason": "Job already processed",
+                        }
+                    )
+                    results_to_append.append(result_line)
+                    print(f"Skipped duplicate job {job_id[:8]}...")
                     continue
 
                 # Validate schema
                 valid, error = validate_job_schema(job)
                 if not valid:
-                    print(f"Warning: Invalid job schema: {error}")
+                    mark_job_processed(db_path, job_id, "denied")
+                    result_line = json.dumps(
+                        {
+                            "job_id": job_id,
+                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "status": "denied",
+                            "reason": error or "Invalid job schema",
+                        }
+                    )
+                    results_to_append.append(result_line)
+                    print(f"Denied job {job_id[:8]}...: {error}")
                     continue
 
-                job_id = job["job_id"]
-
-                # Check if already processed
-                if is_job_processed(db_path, job_id):
-                    continue  # Skip already processed jobs
+                # Validate job age
+                valid, error = validate_job_age(job)
+                if not valid:
+                    mark_job_processed(db_path, job_id, "denied")
+                    result_line = json.dumps(
+                        {
+                            "job_id": job_id,
+                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "status": "denied",
+                            "reason": error or "Job too old",
+                        }
+                    )
+                    results_to_append.append(result_line)
+                    print(f"Denied job {job_id[:8]}...: {error}")
+                    continue
 
                 # Verify HMAC signature
                 valid, error = verify_job_signature(job)
                 if not valid:
-                    print(f"Warning: Invalid signature for job {job_id}: {error}")
-                    # Still record as processed to prevent replay attacks
                     mark_job_processed(db_path, job_id, "denied")
-                    results_to_append.append(
-                        json.dumps(
-                            {
-                                "job_id": job_id,
-                                "processed_at": datetime.utcnow().isoformat() + "Z",
-                                "status": "denied",
-                                "error": {"code": "INVALID_SIGNATURE", "message": error},
-                            }
-                        )
+                    result_line = json.dumps(
+                        {
+                            "job_id": job_id,
+                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                            "status": "denied",
+                            "reason": error or "Invalid signature",
+                        }
                     )
+                    results_to_append.append(result_line)
+                    print(f"Denied job {job_id[:8]}...: {error}")
                     continue
 
                 # Execute job
                 result = execute_job(job)
+                # Ensure result has required fields
+                if "reason" not in result:
+                    result["reason"] = "Success" if result.get("status") == "created" else result.get("error", {}).get("message", "Unknown")
                 results_to_append.append(json.dumps(result))
 
                 # Mark as processed
                 mark_job_processed(db_path, job_id, result["status"])
                 processed_count += 1
 
-                print(f"Processed job {job_id}: {result['status']}")
+                # Log without secrets (only job_id and status)
+                print(f"Processed job {job_id[:8]}...: {result['status']}")
+
+            # Cleanup old jobs periodically (every 100 processed jobs)
+            if processed_count > 0:
+                cleanup_old_jobs(db_path)
 
             # Append results if any
             if results_to_append:
@@ -596,9 +752,17 @@ def process_queue() -> None:
                 print(f"Processed {processed_count} job(s)")
 
         except requests.RequestException as e:
-            print(f"Error fetching Gist: {e}")
+            # Don't log tokens in errors
+            error_msg = str(e)
+            if "token" in error_msg.lower():
+                error_msg = "GitHub API error (check GITHUB_TOKEN)"
+            print(f"Error fetching Gist: {error_msg}")
         except Exception as e:
-            print(f"Error processing queue: {e}")
+            # Don't log secrets
+            error_msg = str(e)
+            if any(secret in error_msg for secret in ["token", "secret", "password"] if os.environ.get(secret)):
+                error_msg = "Error processing queue (check configuration)"
+            print(f"Error processing queue: {error_msg}")
 
         # Wait before next poll
         time.sleep(poll_seconds)

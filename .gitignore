@@ -44,3 +44,6 @@ htmlcov/
 # Environment variables
 .env
 .env.local
+
+# Worker startup script (may contain tokens)
+start_worker.sh
