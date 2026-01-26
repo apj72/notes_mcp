@@ -126,6 +126,39 @@ async def health_check():
     return {"status": "ok", "service": "notes-mcp-ingress"}
 
 
+@app.get("/debug/folders")
+async def debug_folders():
+    """Debug endpoint to show allowed folders (for troubleshooting)."""
+    from notes_mcp.security import get_allowed_folders
+    
+    allowed = get_allowed_folders()
+    env_value = os.environ.get("NOTES_MCP_ALLOWED_FOLDERS", "(not set)")
+    
+    return {
+        "NOTES_MCP_ALLOWED_FOLDERS_env": env_value,
+        "parsed_folders": allowed,
+        "count": len(allowed),
+    }
+
+
+@app.get("/debug/key")
+async def debug_key():
+    """Debug endpoint to check if ingress key is loaded (shows first/last 4 chars only)."""
+    key = os.environ.get("NOTES_MCP_INGRESS_KEY", "(not set)")
+    if key and key != "(not set)":
+        # Show only first 4 and last 4 chars for security
+        masked = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "***"
+        return {
+            "key_loaded": True,
+            "key_length": len(key),
+            "key_preview": masked,
+        }
+    return {
+        "key_loaded": False,
+        "key_value": key,
+    }
+
+
 @app.post("/notes")
 async def create_note(
     request: NoteCreateRequest,

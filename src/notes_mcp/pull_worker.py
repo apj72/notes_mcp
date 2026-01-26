@@ -391,7 +391,7 @@ def mark_job_processed(db_path: Path, job_id: str, status: str) -> None:
     Args:
         db_path: Path to SQLite database
         job_id: Job ID
-        status: Processing status ("created", "denied", "error", "skipped_duplicate")
+        status: Processing status ("created", "denied", "error")
     """
     conn = sqlite3.connect(str(db_path))
     try:
@@ -805,19 +805,11 @@ def process_queue() -> None:
                     results_to_append.append(result_line)
                     continue
 
-                # Check if already processed (idempotency)
+                # Check if already processed (idempotency - safety check)
+                # Note: With queue clearing, duplicates shouldn't appear, but this provides defense in depth
                 if is_job_processed(db_path, job_id):
-                    # Write skipped_duplicate result
-                    result_line = json.dumps(
-                        {
-                            "job_id": job_id,
-                            "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                            "status": "skipped_duplicate",
-                            "reason": "Job already processed",
-                        }
-                    )
-                    results_to_append.append(result_line)
-                    print(f"Skipped duplicate job {job_id[:8]}...")
+                    # Skip silently - no result written since queue clearing should prevent this
+                    print(f"Warning: Duplicate job {job_id[:8]}... detected (should not occur with queue clearing)")
                     continue
 
                 # Validate schema

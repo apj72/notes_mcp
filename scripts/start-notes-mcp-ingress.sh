@@ -15,7 +15,12 @@ fi
 
 # Also try to source start_worker.sh for environment variables
 if [ -f "$PROJECT_ROOT/start_worker.sh" ]; then
-    source <(grep "^export" "$PROJECT_ROOT/start_worker.sh" | sed 's/export //')
+    # Use a more robust method to source environment variables
+    # Create a temp file to avoid process substitution issues in launchd
+    TEMP_ENV=$(mktemp)
+    grep "^export" "$PROJECT_ROOT/start_worker.sh" | sed 's/^export //' > "$TEMP_ENV"
+    source "$TEMP_ENV"
+    rm -f "$TEMP_ENV"
 fi
 
 # Activate virtual environment if it exists

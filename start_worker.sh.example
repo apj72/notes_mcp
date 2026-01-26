@@ -1,0 +1,54 @@
+#!/bin/bash
+# Start the notes-mcp pull worker
+# 
+# SETUP INSTRUCTIONS:
+# 1. Copy this file to start_worker.sh: cp start_worker.sh.example start_worker.sh
+# 2. Edit start_worker.sh and replace all placeholder values with your actual tokens
+# 3. start_worker.sh is gitignored and will not be committed to the repository
+#
+# SECURITY NOTE:
+# Never commit start_worker.sh to git. It contains sensitive tokens.
+
+cd "$(dirname "$0")"
+
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    source venv/bin/activate
+fi
+
+# Set PYTHONPATH
+export PYTHONPATH="src:$PYTHONPATH"
+
+# ============================================
+# EDIT THESE VALUES WITH YOUR ACTUAL TOKENS
+# ============================================
+# Get your Gist ID from: https://gist.github.com/YOUR_USERNAME/YOUR_GIST_ID
+export NOTES_QUEUE_GIST_ID="your-gist-id-here"
+
+# Generate a GitHub Personal Access Token with 'gist' scope:
+# https://github.com/settings/tokens
+export GITHUB_TOKEN="ghp_your_github_token_here"
+
+# Generate a secure token for MCP authentication:
+# openssl rand -hex 32
+export NOTES_MCP_TOKEN="your-mcp-token-here"
+
+# Comma-separated list of allowed folder names in Apple Notes
+# Folder names must match exactly (case-sensitive)
+export NOTES_MCP_ALLOWED_FOLDERS="MCP Inbox,Work,Personal"
+
+# Optional: Override defaults
+export NOTES_QUEUE_POLL_SECONDS="60"  # Poll once per minute (60 polls/hour = 120 API calls/hour)
+# export NOTES_MCP_MAX_JOB_AGE_SECONDS="86400"  # Max age for jobs (default: 24 hours)
+# export NOTES_MCP_ENABLE_SCHEDULING="true"  # Enable business hours (9am-6pm, Mon-Fri)
+# export NOTES_MCP_BUSINESS_HOURS_START="9"
+# export NOTES_MCP_BUSINESS_HOURS_END="18"
+
+# Ingress API key (for Tailscale Funnel public access)
+# Generate once with: openssl rand -hex 32
+# Then paste the generated key here (keep it stable, don't regenerate)
+# This key is used to authenticate requests to the public-facing ingress API
+export NOTES_MCP_INGRESS_KEY="your-ingress-key-here"
+
+# Start the worker
+python3 -m notes_mcp.pull_worker
