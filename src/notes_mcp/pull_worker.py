@@ -15,6 +15,7 @@ from typing import Any, Optional
 import requests
 
 from .applescript import create_note
+from .formatting import normalize_note_body
 from .logging import log_action
 from .security import (
     check_rate_limit,
@@ -27,13 +28,17 @@ from .security import (
 )
 
 # Default configuration
-DEFAULT_POLL_SECONDS = 15
+DEFAULT_POLL_SECONDS = 60  # Poll once per minute (reduces API calls)
 DEFAULT_QUEUE_FILENAME = "queue.jsonl"
 DEFAULT_RESULTS_FILENAME = "results.jsonl"
 DEFAULT_DB_PATH = Path.home() / ".notes-mcp-queue" / "worker.sqlite3"
 DEFAULT_MAX_JOB_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 MAX_PROCESSED_JOBS_TO_KEEP = 5000
 MAX_FOLDER_NAME_LENGTH = 200
+
+# Business hours scheduling (9am-6pm, Monday-Friday)
+DEFAULT_BUSINESS_HOURS_START = 9  # 9 AM
+DEFAULT_BUSINESS_HOURS_END = 18  # 6 PM (18:00)
 
 
 def get_github_token() -> Optional[str]:
@@ -49,6 +54,33 @@ def get_gist_id() -> Optional[str]:
 def get_hmac_secret() -> Optional[str]:
     """Get HMAC secret, preferring NOTES_QUEUE_HMAC_SECRET, falling back to NOTES_MCP_TOKEN."""
     return os.environ.get("NOTES_QUEUE_HMAC_SECRET") or get_auth_token()
+
+
+def is_business_hours() -> bool:
+    """
+    Check if current time is within business hours (9am-6pm, Monday-Friday).
+
+    Returns:
+        True if within business hours, False otherwise
+    """
+    # Check if scheduling is enabled
+    if os.environ.get("NOTES_MCP_ENABLE_SCHEDULING", "").lower() != "true":
+        return True  # Scheduling disabled, always allow
+    
+    now = datetime.now()
+    
+    # Check day of week (Monday=0, Friday=4)
+    weekday = now.weekday()
+    if weekday >= 5:  # Saturday (5) or Sunday (6)
+        return False
+    
+    # Get business hours from environment or use defaults
+    start_hour = int(os.environ.get("NOTES_MCP_BUSINESS_HOURS_START", DEFAULT_BUSINESS_HOURS_START))
+    end_hour = int(os.environ.get("NOTES_MCP_BUSINESS_HOURS_END", DEFAULT_BUSINESS_HOURS_END))
+    
+    current_hour = now.hour
+    
+    return start_hour <= current_hour < end_hour
 
 
 def canonicalize_job(job: dict[str, Any]) -> str:
@@ -184,6 +216,110 @@ def append_gist_file(
     new_content = current_content + "\n".join(new_lines)
     if new_lines:
         new_content += "\n"
+
+    # Update Gist
+    url = f"https://api.github.com/gists/{gist_id}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    files_payload = {filename: {"content": new_content}}
+    if current_sha:
+        files_payload[filename]["sha"] = current_sha
+
+    payload = {"files": files_payload}
+
+    response = requests.patch(url, headers=headers, json=payload, timeout=10)
+    response.raise_for_status()
+
+    return True
+
+
+def update_gist_file(
+    gist_id: str, filename: str, new_content: str, expected_sha: Optional[str] = None
+) -> bool:
+    """
+    Update a Gist file with new content (replaces entire file).
+
+    Uses optimistic concurrency with file SHA.
+
+    Args:
+        gist_id: GitHub Gist ID
+        filename: Name of the file to update
+        new_content: New file content (replaces entire file)
+        expected_sha: Optional expected SHA of current file (for optimistic locking)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    token = get_github_token()
+    if not token:
+        raise ValueError("GITHUB_TOKEN environment variable is required")
+
+    # Fetch current content to get SHA
+    files = fetch_gist_files(gist_id)
+
+    if filename not in files:
+        current_sha = None
+    else:
+        current_sha = files[filename]["sha"]
+
+        # Verify SHA if provided (optimistic concurrency)
+        if expected_sha and current_sha != expected_sha:
+            return False  # File was modified, retry needed
+
+    # Update Gist
+    url = f"https://api.github.com/gists/{gist_id}"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    files_payload = {filename: {"content": new_content}}
+    if current_sha:
+        files_payload[filename]["sha"] = current_sha
+
+    payload = {"files": files_payload}
+
+    response = requests.patch(url, headers=headers, json=payload, timeout=10)
+    response.raise_for_status()
+
+    return True
+
+
+def update_gist_file(
+    gist_id: str, filename: str, new_content: str, expected_sha: Optional[str] = None
+) -> bool:
+    """
+    Update a Gist file with new content (replaces entire file).
+
+    Uses optimistic concurrency with file SHA.
+
+    Args:
+        gist_id: GitHub Gist ID
+        filename: Name of the file to update
+        new_content: New file content (replaces entire file)
+        expected_sha: Optional expected SHA of current file (for optimistic locking)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    token = get_github_token()
+    if not token:
+        raise ValueError("GITHUB_TOKEN environment variable is required")
+
+    # Fetch current content to get SHA
+    files = fetch_gist_files(gist_id)
+
+    if filename not in files:
+        current_sha = None
+    else:
+        current_sha = files[filename]["sha"]
+
+        # Verify SHA if provided (optimistic concurrency)
+        if expected_sha and current_sha != expected_sha:
+            return False  # File was modified, retry needed
 
     # Update Gist
     url = f"https://api.github.com/gists/{gist_id}"
@@ -401,6 +537,9 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     folder = args.get("folder")
     account = args.get("account")
     confirm = args.get("confirm", False)
+    
+    # Normalize body formatting (convert literal \n to real newlines, etc.)
+    body = normalize_note_body(body)
 
     # Use a fixed token for rate limiting (worker token)
     # We'll use the HMAC secret as the rate limit key
@@ -614,6 +753,14 @@ def process_queue() -> None:
 
     while True:
         try:
+            # Check if we're in business hours (if scheduling enabled)
+            if not is_business_hours():
+                # Outside business hours, wait longer before checking again
+                wait_time = 60 * 5  # Wait 5 minutes outside business hours
+                print(f"Outside business hours. Waiting {wait_time // 60} minutes before next check...")
+                time.sleep(wait_time)
+                continue
+            
             # Fetch Gist files
             files = fetch_gist_files(gist_id)
 
@@ -748,6 +895,57 @@ def process_queue() -> None:
                 if not success:
                     print("Warning: Failed to append results (concurrent modification, will retry)")
 
+            # Clear processed jobs from queue
+            if processed_count > 0:
+                # Extract job IDs that were processed (got a result)
+                processed_job_ids = set()
+                for result_line in results_to_append:
+                    try:
+                        result = json.loads(result_line)
+                        job_id = result.get("job_id")
+                        if job_id and job_id != "unknown":
+                            processed_job_ids.add(job_id)
+                    except json.JSONDecodeError:
+                        continue
+
+                # Remove processed jobs from queue
+                if processed_job_ids:
+                    # Re-fetch queue to get current state
+                    try:
+                        current_files = fetch_gist_files(gist_id)
+                        if queue_filename in current_files:
+                            queue_content = current_files[queue_filename]["content"]
+                            queue_sha = current_files[queue_filename]["sha"]
+
+                            # Filter out processed jobs
+                            remaining_lines = []
+                            for line in queue_content.strip().split("\n"):
+                                if not line.strip():
+                                    continue
+                                try:
+                                    job = json.loads(line)
+                                    job_id = job.get("job_id")
+                                    if job_id not in processed_job_ids:
+                                        remaining_lines.append(line)
+                                except json.JSONDecodeError:
+                                    # Keep invalid JSON lines (they'll be skipped on next poll)
+                                    remaining_lines.append(line)
+
+                            # Update queue with remaining jobs
+                            new_queue_content = "\n".join(remaining_lines)
+                            if remaining_lines:
+                                new_queue_content += "\n"
+
+                            success = update_gist_file(gist_id, queue_filename, new_queue_content, queue_sha)
+                            if success:
+                                removed_count = len(processed_job_ids)
+                                print(f"Cleared {removed_count} processed job(s) from queue")
+                            else:
+                                print("Warning: Failed to clear queue (concurrent modification, will retry next poll)")
+                    except Exception as e:
+                        # Don't fail the whole poll if queue clearing fails
+                        print(f"Warning: Failed to clear queue: {e}")
+
             if processed_count > 0:
                 print(f"Processed {processed_count} job(s)")
 
@@ -756,6 +954,56 @@ def process_queue() -> None:
             error_msg = str(e)
             if "token" in error_msg.lower():
                 error_msg = "GitHub API error (check GITHUB_TOKEN)"
+            
+            # Check for rate limit errors (403 can mean rate limit or auth issue)
+            if hasattr(e, "response") and e.response is not None:
+                if e.response.status_code == 403:
+                    # Check rate limit headers first (most reliable)
+                    remaining = e.response.headers.get("X-RateLimit-Remaining")
+                    reset_time = e.response.headers.get("X-RateLimit-Reset")
+                    
+                    # If remaining is 0, it's definitely a rate limit
+                    if remaining is not None and int(remaining) == 0:
+                        if reset_time:
+                            reset_time = int(reset_time)
+                            wait_seconds = reset_time - int(time.time())
+                            if wait_seconds > 0:
+                                print(
+                                    f"GitHub API rate limit exceeded (remaining: 0). "
+                                    f"Will retry after reset (in {wait_seconds // 60} minutes)"
+                                )
+                                # Wait for rate limit reset, but cap at poll interval
+                                time.sleep(min(wait_seconds, poll_seconds))
+                                continue
+                    
+                    # Also check error message for rate limit indicators
+                    try:
+                        error_data = e.response.json()
+                        error_text = str(error_data).lower()
+                        if "rate limit" in error_text or "api rate limit" in error_text:
+                            if reset_time:
+                                reset_time = int(reset_time)
+                                wait_seconds = reset_time - int(time.time())
+                                if wait_seconds > 0:
+                                    print(
+                                        f"GitHub API rate limit exceeded. "
+                                        f"Will retry after reset (in {wait_seconds // 60} minutes)"
+                                    )
+                                    time.sleep(min(wait_seconds, poll_seconds))
+                                    continue
+                        else:
+                            # 403 but not rate limit - could be auth issue
+                            print(
+                                f"GitHub API 403 Forbidden (not rate limit). "
+                                f"Check GITHUB_TOKEN permissions and validity."
+                            )
+                    except Exception:
+                        # Can't parse error, but still 403
+                        print(
+                            f"GitHub API 403 Forbidden. "
+                            f"Check GITHUB_TOKEN permissions and rate limit status."
+                        )
+            
             print(f"Error fetching Gist: {error_msg}")
         except Exception as e:
             # Don't log secrets

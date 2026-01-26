@@ -47,3 +47,9 @@ htmlcov/
 
 # Worker startup script (may contain tokens)
 start_worker.sh
+
+# Internal documentation and helper files (Q&A, development notes)
+docs/internal/
+
+# Local data exports
+.data/

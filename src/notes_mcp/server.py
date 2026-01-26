@@ -5,6 +5,7 @@ import sys
 from typing import Any, Optional
 
 from .applescript import create_note
+from .formatting import normalize_note_body
 from .logging import log_action
 from .security import (
     validate_create_request,
@@ -146,6 +147,10 @@ class MCPServer:
         folder = arguments.get("folder")
         account = arguments.get("account")
         confirm = arguments.get("confirm", False)
+        
+        # Normalize body formatting (convert literal \n to real newlines, etc.)
+        # Do this BEFORE validation so validation sees the normalized body
+        body = normalize_note_body(body)
 
         # Extract token from arguments (MCP clients can pass it in a metadata field)
         # For stdio transport, we'll check for it in a special field

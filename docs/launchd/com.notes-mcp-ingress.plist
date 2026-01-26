@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.notes-mcp-ingress</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ajoyce/git-repos/notes_mcp/scripts/start-notes-mcp-ingress.sh</string>
+    </array>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ENV_SCRIPT_PATH</key>
+        <string>/Users/ajoyce/git-repos/notes_mcp/start_worker.sh</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    
+    <key>WorkingDirectory</key>
+    <string>/Users/ajoyce/git-repos/notes_mcp</string>
+    
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <key>KeepAlive</key>
+    <true/>
+    
+    <key>StandardOutPath</key>
+    <string>/Users/ajoyce/Library/Logs/notes-mcp/ingress.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/ajoyce/Library/Logs/notes-mcp/ingress.error.log</string>
+</dict>
+</plist>

@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 # Add src to path for imports (works when run as module or script)
@@ -18,11 +19,20 @@ else:
 import requests
 
 from notes_mcp.pull_worker import (
+    DEFAULT_DB_PATH,
     DEFAULT_QUEUE_FILENAME,
+    execute_job,
     fetch_gist_files,
     get_gist_id,
     get_github_token,
+    init_state_db,
+    is_job_processed,
+    mark_job_processed,
+    validate_job_age,
+    validate_job_schema,
+    verify_job_signature,
 )
+from pathlib import Path
 
 
 def append_to_queue(gist_id: str, job_line: str) -> bool:
@@ -83,10 +93,47 @@ def append_to_queue(gist_id: str, job_line: str) -> bool:
 
         payload = {"files": files_payload}
 
-        response = requests.patch(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
+        # Retry logic for rate limits
+        max_retries = 3
+        retry_delay = 1  # Start with 1 second
+        
+        for attempt in range(max_retries):
+            response = requests.patch(url, headers=headers, json=payload, timeout=10)
+            
+            # Check rate limit headers
+            remaining = response.headers.get("X-RateLimit-Remaining")
+            if remaining:
+                remaining = int(remaining)
+                if remaining == 0:
+                    reset_time = int(response.headers.get("X-RateLimit-Reset", 0))
+                    if reset_time > 0:
+                        wait_seconds = reset_time - int(time.time())
+                        if wait_seconds > 0:
+                            print(
+                                f"Rate limit exceeded. Reset in {wait_seconds} seconds. "
+                                f"Waiting...",
+                                file=sys.stderr,
+                            )
+                            time.sleep(min(wait_seconds + 1, 60))  # Wait up to 60 seconds
+                            continue
+            
+            # If not rate limited, check status
+            if response.status_code == 403 and "rate limit" in response.text.lower():
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(
+                        f"Rate limit hit. Retrying in {wait_time} seconds... (attempt {attempt + 1}/{max_retries})",
+                        file=sys.stderr,
+                    )
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    response.raise_for_status()
+            
+            response.raise_for_status()
+            return True
 
-        return True
+        return False
 
     except requests.RequestException as e:
         print(f"Error updating Gist: {e}", file=sys.stderr)
@@ -94,7 +141,16 @@ def append_to_queue(gist_id: str, job_line: str) -> bool:
             try:
                 error_data = e.response.json()
                 if "message" in error_data:
-                    print(f"  GitHub API error: {error_data['message']}", file=sys.stderr)
+                    error_msg = error_data["message"]
+                    print(f"  GitHub API error: {error_msg}", file=sys.stderr)
+                    
+                    # Provide helpful message for rate limits
+                    if "rate limit" in error_msg.lower():
+                        print(
+                            "  Note: GitHub API rate limit exceeded. "
+                            "Wait a few minutes and try again, or check your token's rate limit.",
+                            file=sys.stderr,
+                        )
             except Exception:
                 pass
         return False
@@ -103,27 +159,102 @@ def append_to_queue(gist_id: str, job_line: str) -> bool:
         return False
 
 
+def process_job_immediately(job_line: str) -> bool:
+    """
+    Process a job immediately without enqueueing to Gist.
+    
+    Args:
+        job_line: JSON job line
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    import json
+    from notes_mcp.pull_worker import DEFAULT_DB_PATH
+    
+    try:
+        job = json.loads(job_line)
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON in job line: {e}", file=sys.stderr)
+        return False
+    
+    job_id = job.get("job_id")
+    if not job_id:
+        print("Error: Missing job_id in job", file=sys.stderr)
+        return False
+    
+    # Initialize state DB
+    db_path = Path(os.environ.get("NOTES_QUEUE_DB", str(DEFAULT_DB_PATH)))
+    init_state_db(db_path)
+    
+    # Check if already processed
+    if is_job_processed(db_path, job_id):
+        print(f"Job {job_id[:8]}... already processed (skipping)", file=sys.stderr)
+        return False
+    
+    # Validate schema
+    valid, error = validate_job_schema(job)
+    if not valid:
+        print(f"Error: Invalid job schema: {error}", file=sys.stderr)
+        mark_job_processed(db_path, job_id, "denied")
+        return False
+    
+    # Validate job age
+    valid, error = validate_job_age(job)
+    if not valid:
+        print(f"Error: {error}", file=sys.stderr)
+        mark_job_processed(db_path, job_id, "denied")
+        return False
+    
+    # Verify signature
+    valid, error = verify_job_signature(job)
+    if not valid:
+        print(f"Error: {error}", file=sys.stderr)
+        mark_job_processed(db_path, job_id, "denied")
+        return False
+    
+    # Execute job
+    result = execute_job(job)
+    mark_job_processed(db_path, job_id, result["status"])
+    
+    # Print result
+    if result["status"] == "created":
+        print(f"✓ Note created: {result.get('location', {}).get('folder', 'unknown')}/{result.get('reference', '')}")
+        return True
+    else:
+        print(f"✗ Job failed: {result.get('reason', 'Unknown error')}", file=sys.stderr)
+        return False
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Enqueue a signed job to the notes-mcp queue",
+        description="Enqueue a signed job to the notes-mcp queue, or process immediately",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Enqueue from sign_job output (pipe)
+  # Enqueue to Gist (processed by background worker)
   python3 -m notes_mcp.sign_job --title "Test" --body "Content" | python3 -m notes_mcp.enqueue_job
+
+  # Process immediately (bypasses queue)
+  python3 -m notes_mcp.sign_job --title "Test" --body "Content" | python3 -m notes_mcp.enqueue_job --immediate
 
   # Enqueue from file
   python3 -m notes_mcp.enqueue_job < job.jsonl
 
-  # Enqueue from stdin
-  echo '{"job_id":"...","sig":"..."}' | python3 -m notes_mcp.enqueue_job
+  # Process immediately from stdin
+  echo '{"job_id":"...","sig":"..."}' | python3 -m notes_mcp.enqueue_job --immediate
         """,
     )
     parser.add_argument(
         "job_line",
         nargs="?",
         help="JSON job line (if not provided, reads from stdin)",
+    )
+    parser.add_argument(
+        "--immediate",
+        action="store_true",
+        help="Process job immediately instead of enqueueing to Gist",
     )
 
     args = parser.parse_args()
@@ -138,7 +269,15 @@ Examples:
         print("Error: No job line provided", file=sys.stderr)
         sys.exit(1)
 
-    # Get Gist ID
+    # Process immediately if requested
+    if args.immediate:
+        success = process_job_immediately(job_line)
+        if success:
+            sys.exit(0)
+        else:
+            sys.exit(1)
+
+    # Otherwise, enqueue to Gist
     gist_id = get_gist_id()
     if not gist_id:
         print("Error: NOTES_QUEUE_GIST_ID environment variable is required", file=sys.stderr)

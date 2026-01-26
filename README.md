@@ -1,6 +1,13 @@
 # Notes MCP Server
 
-A local MCP (Model Context Protocol) server for creating notes in Apple Notes on macOS. This server provides a secure, authenticated interface for creating notes with comprehensive security controls including authentication, rate limiting, folder allowlisting, and audit logging.
+A comprehensive system for creating and managing notes in Apple Notes on macOS. This project provides three main components:
+
+1. **MCP Server** - Direct MCP (Model Context Protocol) server for creating notes via stdio/JSON-RPC
+2. **Pull Worker** - Background service that processes note creation jobs from a GitHub Gist queue
+3. **Tailscale Ingress API** - HTTP API endpoint (Tailnet-only) for creating notes without copy/paste
+4. **Notes Export** - Local tool for exporting Apple Notes metadata/content to SQLite or JSONL
+
+All components share the same security controls: authentication, rate limiting, folder allowlisting, confirmation modes, and audit logging.
 
 ## Prerequisites
 
@@ -62,7 +69,9 @@ export NOTES_MCP_ALLOWED_FOLDERS="MCP Inbox,Work,Personal"
 export NOTES_MCP_REQUIRE_CONFIRM="false"
 ```
 
-## Running the Server
+## Quick Start
+
+### Option 1: Direct MCP Server (for Cursor/IDE integration)
 
 The server uses stdio transport (standard input/output) for MCP communication. Run it directly:
 
@@ -70,15 +79,39 @@ The server uses stdio transport (standard input/output) for MCP communication. R
 python3 -m notes_mcp.server
 ```
 
-Or if installed as a package:
-
-```bash
-notes-mcp-server
-```
-
 **Note**: On macOS, use `python3` instead of `python` if the `python` command is not found.
 
 The server will read JSON-RPC requests from stdin and write responses to stdout.
+
+### Option 2: Pull Worker (for async processing via Gist queue)
+
+Set up environment variables (see Pull Worker section below) and run:
+
+```bash
+python3 -m notes_mcp.pull_worker
+```
+
+Or set up as a background service:
+
+```bash
+./setup_service.sh
+```
+
+### Option 3: Tailscale Ingress API (for HTTP access)
+
+Start the ingress service:
+
+```bash
+./start_ingress.sh
+```
+
+Then expose via Tailscale:
+
+```bash
+sudo /Applications/Tailscale.app/Contents/MacOS/tailscale serve --bg --http=8443 http://127.0.0.1:8443
+```
+
+See `TAILSCALE_INGRESS_GUIDE.md` for complete setup instructions.
 
 ## Cursor MCP Client Configuration
 
@@ -358,48 +391,24 @@ python3 -m notes_mcp.pull_worker
 
 **Background with launchd (macOS):**
 
-Create `~/Library/LaunchAgents/com.notes-mcp.worker.plist`:
+See `SERVICE_SETUP.md` for complete instructions. Quick setup:
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.notes-mcp.worker</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/python3</string>
-        <string>-m</string>
-        <string>notes_mcp.pull_worker</string>
-    </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>NOTES_QUEUE_GIST_ID</key>
-        <string>your-gist-id</string>
-        <key>GITHUB_TOKEN</key>
-        <string>your-github-token</string>
-        <key>NOTES_MCP_TOKEN</key>
-        <string>your-mcp-token</string>
-        <key>NOTES_MCP_ALLOWED_FOLDERS</key>
-        <string>MCP Inbox,Work,Personal</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/notes-mcp-worker.out</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/notes-mcp-worker.err</string>
-</dict>
-</plist>
-```
-
-Load it:
 ```bash
+# Automated setup
+./setup_service.sh
+
+# Or manually
+cp com.notes-mcp.worker.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.notes-mcp.worker.plist
 ```
+
+**Managing the service:**
+- Start: `launchctl start com.notes-mcp.worker`
+- Stop: `launchctl stop com.notes-mcp.worker`
+- Check status: `launchctl list | grep notes-mcp`
+- View logs: `tail -f /tmp/notes-mcp-worker.out`
+
+See `SERVICE_SETUP.md` for detailed documentation.
 
 ### Security Notes
 
@@ -506,6 +515,10 @@ All actions are logged to `~/Library/Logs/notes-mcp/notes-mcp.log` in JSON forma
    - Verify `GITHUB_TOKEN` is set and valid
    - Check token has gists read/write permissions
    - Verify token hasn't expired
+   - **Rate limit exceeded**: See `TROUBLESHOOTING_RATE_LIMITS.md` for details
+     - Wait 5-10 minutes and try again
+     - Check your token's rate limit: `curl -H "Authorization: token YOUR_TOKEN" https://api.github.com/rate_limit`
+     - Increase poll interval: `export NOTES_QUEUE_POLL_SECONDS="30"`
 
 8. **Gist file missing**
    - Ensure `queue.jsonl` and `results.jsonl` exist in the gist
@@ -526,24 +539,147 @@ All actions are logged to `~/Library/Logs/notes-mcp/notes-mcp.log` in JSON forma
 tail -f ~/Library/Logs/notes-mcp/notes-mcp.log
 ```
 
+## Tailscale Ingress API
+
+The Tailscale Ingress API provides a secure HTTP endpoint for creating notes without requiring copy/paste of commands. It's accessible only over your Tailnet (not the public internet).
+
+### Features
+
+- **Tailnet-only access** - Only accessible via Tailscale VPN
+- **HTTP API** - Simple POST requests to create notes
+- **No copy/paste** - Direct API calls from iOS Shortcuts, webhooks, etc.
+- **Optional authentication** - Additional header-based auth (beyond Tailscale ACLs)
+- **Rate limiting** - 30 requests per minute per IP
+- **Reuses all security controls** - Folder allowlist, confirmation, validation
+
+### Quick Start
+
+1. **Install dependencies:**
+   ```bash
+   python3 -m pip install fastapi uvicorn pydantic
+   ```
+
+2. **Start the ingress service:**
+   ```bash
+   ./start_ingress.sh
+   ```
+
+3. **Expose via Tailscale:**
+   ```bash
+   sudo /Applications/Tailscale.app/Contents/MacOS/tailscale serve --bg --http=8443 http://127.0.0.1:8443
+   ```
+
+4. **Test it:**
+   ```bash
+   curl -X POST http://yourmachine.tailnet.ts.net:8443/notes \
+     -H "Content-Type: application/json" \
+     -d '{"title": "Test", "body": "Test content", "folder": "MCP Inbox"}'
+   ```
+
+See `TAILSCALE_INGRESS_GUIDE.md` for complete documentation, including:
+- Setup instructions
+- iOS Shortcut integration
+- API reference
+- Troubleshooting
+
+## Notes Export
+
+The export tool allows you to read and export Apple Notes content locally for search, summarization, or backup purposes.
+
+### Features
+
+- **Local-only** - All data stays on your Mac
+- **Privacy-first** - Metadata-only export by default (bodies excluded unless explicitly requested)
+- **Multiple formats** - Export to SQLite or JSONL
+- **Filtering** - Filter by date, limit count, include/exclude bodies
+- **Tag extraction** - Automatically extracts tags from title prefixes (e.g., `[WORK]`)
+
+### Usage
+
+```bash
+# Export metadata only (default)
+python3 -m notes_mcp.export_notes
+
+# Export with bodies
+python3 -m notes_mcp.export_notes --include-body
+
+# Export recent notes only
+python3 -m notes_mcp.export_notes --since-days 7 --max-notes 100
+
+# Export to SQLite
+python3 -m notes_mcp.export_notes --format sqlite --output .data/notes.db
+```
+
+Output files are saved to `.data/` directory (gitignored). See `TAILSCALE_INGRESS_GUIDE.md` for more details.
+
 ## Development
 
 ### Project Structure
 
 ```
 notes_mcp/
-├── pyproject.toml          # Project configuration
-├── README.md               # This file
+├── pyproject.toml                    # Project configuration
+├── README.md                          # This file
+├── README_WORKER.md                   # Worker quick start guide
+├── TAILSCALE_INGRESS_GUIDE.md        # Ingress API guide
+├── QUICK_START_INGRESS.md            # Quick start for ingress
+├── SERVICE_SETUP.md                   # Service setup guide
+├── SECURITY_REVIEW.md                 # Security documentation
+├── GIST_TEMPLATE.md                   # Gist setup template
+├── setup_service.sh                   # Worker service setup
+├── start_ingress.sh                   # Ingress startup script
+├── com.notes-mcp.worker.plist        # Worker launchd config
+├── scripts/                           # Helper scripts
+│   ├── setup-tailscale-serve.sh      # Tailscale setup
+│   ├── get-tailscale-hostname.sh     # Hostname helper
+│   ├── install-ingress-service.sh    # Ingress installer
+│   ├── start-notes-mcp-ingress.sh    # Ingress startup
+│   └── smoke_test.sh                 # Smoke test
+├── docs/                              # Additional documentation
+│   ├── launchd/                       # Launchd configs
+│   └── TAILSCALE_ADMIN_CONSOLE_CONFIG.md
 └── src/
     └── notes_mcp/
-        ├── __init__.py     # Package initialization
-        ├── server.py       # MCP server implementation
-        ├── applescript.py  # AppleScript integration
-        ├── security.py     # Security utilities
-        ├── logging.py      # Audit logging
-        ├── pull_worker.py  # Queue-based pull worker
-        └── sign_job.py     # Helper for signing jobs
+        ├── __init__.py               # Package initialization
+        ├── server.py                 # MCP server (stdio)
+        ├── pull_worker.py             # Queue-based worker
+        ├── ingress.py                 # Tailscale ingress API
+        ├── export_notes.py           # Notes export tool
+        ├── applescript.py             # AppleScript integration
+        ├── security.py                # Security utilities
+        ├── logging.py                 # Audit logging
+        ├── formatting.py              # Text normalization
+        ├── sign_job.py                # Job signing helper
+        └── enqueue_job.py             # Job enqueue helper
 ```
+
+### Current Status
+
+**✅ Implemented:**
+- MCP server with stdio transport
+- Pull worker with GitHub Gist queue
+- Tailscale Ingress API (HTTP endpoint)
+- Notes export tool (local read access)
+- Comprehensive security controls
+- Launchd service setup for worker and ingress
+- Queue clearing and idempotency
+- Text formatting normalization
+- Rate limit handling improvements
+
+**📚 Documentation:**
+- Complete setup guides for all components
+- API reference documentation
+- Security review
+- Troubleshooting guides
+
+**🔒 Security:**
+- HMAC-signed jobs
+- Folder allowlisting
+- Rate limiting
+- Optional confirmation modes
+- Audit logging (no secrets)
+- Input validation
+- AppleScript injection defense
 
 ### Running Tests
 
