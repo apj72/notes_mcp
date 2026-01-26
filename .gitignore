@@ -45,11 +45,56 @@ htmlcov/
 .env
 .env.local
 
-# Worker startup script (may contain tokens)
+# Secrets and configuration files (NEVER commit these)
 start_worker.sh
+start_ingress.sh
+*.env
+*.env.local
+*.secret
+*.key
 
-# Internal documentation and helper files (Q&A, development notes)
+# Template files are safe to commit (they contain placeholders)
+# start_worker.sh.example
+# start_ingress.sh.example
+
+# Launchd plist files (may contain paths/tokens)
+com.notes-mcp.*.plist
+*.plist.local
+
+# Internal documentation and helper files (Q&A, development notes, test scripts)
 docs/internal/
+
+# Q&A and troubleshooting documentation (created as responses to questions)
+SECRETS.md
+CHANGES_SUMMARY.md
+CHATGPT_SETUP.md
+QUICK_CUSTOM_GPT_SETUP.md
+CUSTOM_INSTRUCTIONS_TEXT.md
+QUICK_START_INGRESS.md
+README_WORKER.md
+SERVICE_SETUP.md
+SECURITY_REVIEW.md
+TAILSCALE_INGRESS_GUIDE.md
+GIST_TEMPLATE.md
+docs/ACCESS_WITHOUT_TAILSCALE.md
+docs/CHATGPT_BROWSER_ACCESS.md
+docs/CHATGPT_CUSTOM_INSTRUCTIONS.md
+docs/CUSTOM_GPT_SETUP_FOR_AUTOMATION.md
+docs/SERVICE_HOSTNAME_DNS_FIX.md
+docs/TAILSCALE_SERVICES_UI_SETUP.md
+docs/TAILSCALE_ADMIN_CONSOLE_SETUP.md
+docs/TAILSCALE_ACL_TROUBLESHOOTING.md
+docs/TAILSCALE_CONNECTION_FIX.md
+docs/TAILSCALE_ADMIN_CONSOLE_CONFIG.md
+
+# Diagnostic/troubleshooting scripts (Q&A responses)
+scripts/diagnose-tailscale-connection.sh
+scripts/list-apple-notes-folders.sh
 
 # Local data exports
 .data/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride

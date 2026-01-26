@@ -38,36 +38,39 @@ python3 -m pip install -e .
 
 ## Configuration
 
-Set the following environment variables before running the server:
+### Initial Setup
 
-### Required
+1. **Copy the configuration template:**
+   ```bash
+   cp start_worker.sh.example start_worker.sh
+   ```
 
-- **`NOTES_MCP_TOKEN`**: Shared secret token for authentication. Choose a strong, random value:
-```bash
-export NOTES_MCP_TOKEN="your-secret-token-here"
-```
+2. **Edit `start_worker.sh`** and replace all placeholder values with your actual tokens and IDs.
 
-### Optional
+3. **Generate secure tokens:**
+   ```bash
+   # MCP Authentication Token
+   openssl rand -hex 32
+   
+   # Ingress API Key (for Tailscale Funnel)
+   openssl rand -hex 32
+   ```
 
-- **`NOTES_MCP_ALLOWED_FOLDERS`**: Comma-separated list of allowed folder names. The folder "MCP Inbox" is always allowed by default:
-```bash
-export NOTES_MCP_ALLOWED_FOLDERS="MCP Inbox,Work,Personal"
-```
+**Important:** `start_worker.sh` is gitignored and contains sensitive secrets. Never commit it to version control.
 
-- **`NOTES_MCP_REQUIRE_CONFIRM`**: If set to `"true"`, all create requests must include `confirm: true`:
-```bash
-export NOTES_MCP_REQUIRE_CONFIRM="true"
-```
+### Required Environment Variables
 
-### Example Configuration
+- **`NOTES_MCP_TOKEN`**: Shared secret token for authentication
+- **`GITHUB_TOKEN`**: GitHub Personal Access Token (for Gist queue, requires 'gist' scope)
+- **`NOTES_QUEUE_GIST_ID`**: Your GitHub Gist ID (from the Gist URL)
 
-Create a `.env` file or add to your shell profile:
+### Optional Environment Variables
 
-```bash
-export NOTES_MCP_TOKEN="$(openssl rand -hex 32)"
-export NOTES_MCP_ALLOWED_FOLDERS="MCP Inbox,Work,Personal"
-export NOTES_MCP_REQUIRE_CONFIRM="false"
-```
+- **`NOTES_MCP_ALLOWED_FOLDERS`**: Comma-separated list of allowed folder names (default: "MCP Inbox")
+- **`NOTES_MCP_INGRESS_KEY`**: Ingress API key for Tailscale Funnel public access
+- **`NOTES_MCP_REQUIRE_CONFIRM`**: If `"true"`, all create requests must include `confirm: true`
+- **`NOTES_QUEUE_POLL_SECONDS`**: Polling interval in seconds (default: 60)
+- **`NOTES_MCP_MAX_JOB_AGE_SECONDS`**: Maximum age for jobs in seconds (default: 86400 = 24 hours)
 
 ## Quick Start
 
@@ -108,10 +111,14 @@ Start the ingress service:
 Then expose via Tailscale:
 
 ```bash
+# For Tailnet-only access (private)
 sudo /Applications/Tailscale.app/Contents/MacOS/tailscale serve --bg --http=8443 http://127.0.0.1:8443
+
+# For public access via Funnel (requires ingress key)
+sudo /Applications/Tailscale.app/Contents/MacOS/tailscale funnel --bg http://127.0.0.1:8443
 ```
 
-See `TAILSCALE_INGRESS_GUIDE.md` for complete setup instructions.
+**Note:** For public Funnel access, ensure `NOTES_MCP_INGRESS_KEY` is set in `start_worker.sh` and include it in requests as `X-Notes-MCP-Key` header.
 
 ## Cursor MCP Client Configuration
 
@@ -355,17 +362,17 @@ The pull worker allows you to process note creation jobs from a remote GitHub Gi
 
 #### 3. Configure Environment Variables
 
-```bash
-export NOTES_QUEUE_GIST_ID="your-gist-id-here"
-export GITHUB_TOKEN="your-github-token-here"
-export NOTES_QUEUE_POLL_SECONDS="15"  # Optional, default 15
-export NOTES_QUEUE_FILENAME="queue.jsonl"  # Optional
-export NOTES_RESULTS_FILENAME="results.jsonl"  # Optional
-export NOTES_QUEUE_DB="~/.notes-mcp-queue/worker.sqlite3"  # Optional
-export NOTES_QUEUE_HMAC_SECRET="..."  # Optional, uses NOTES_MCP_TOKEN if not set
-```
+Edit `start_worker.sh` (created from `start_worker.sh.example`) and set:
 
-**Important**: The HMAC secret defaults to `NOTES_MCP_TOKEN` if `NOTES_QUEUE_HMAC_SECRET` is not set. This keeps secrets in sync, but you can use a separate secret if preferred.
+- `NOTES_QUEUE_GIST_ID` - Your GitHub Gist ID
+- `GITHUB_TOKEN` - Your GitHub Personal Access Token
+- `NOTES_MCP_TOKEN` - Your MCP authentication token
+- `NOTES_MCP_ALLOWED_FOLDERS` - Comma-separated list of allowed folders
+- `NOTES_MCP_INGRESS_KEY` - (Optional) Ingress API key for Tailscale Funnel
+
+**Important**: 
+- `start_worker.sh` is gitignored and contains sensitive secrets. Never commit it.
+- The HMAC secret defaults to `NOTES_MCP_TOKEN` if `NOTES_QUEUE_HMAC_SECRET` is not set.
 
 #### 4. Generate a Signed Job
 
@@ -391,24 +398,20 @@ python3 -m notes_mcp.pull_worker
 
 **Background with launchd (macOS):**
 
-See `SERVICE_SETUP.md` for complete instructions. Quick setup:
-
 ```bash
 # Automated setup
 ./setup_service.sh
 
 # Or manually
 cp com.notes-mcp.worker.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.notes-mcp.worker.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.notes-mcp.worker.plist
 ```
 
 **Managing the service:**
-- Start: `launchctl start com.notes-mcp.worker`
-- Stop: `launchctl stop com.notes-mcp.worker`
+- Start: `launchctl kickstart -k gui/$(id -u)/com.notes-mcp.worker`
+- Stop: `launchctl bootout gui/$(id -u)/com.notes-mcp.worker`
 - Check status: `launchctl list | grep notes-mcp`
-- View logs: `tail -f /tmp/notes-mcp-worker.out`
-
-See `SERVICE_SETUP.md` for detailed documentation.
+- View logs: Check `~/Library/Logs/notes-mcp/` directory
 
 ### Security Notes
 
@@ -515,7 +518,7 @@ All actions are logged to `~/Library/Logs/notes-mcp/notes-mcp.log` in JSON forma
    - Verify `GITHUB_TOKEN` is set and valid
    - Check token has gists read/write permissions
    - Verify token hasn't expired
-   - **Rate limit exceeded**: See `TROUBLESHOOTING_RATE_LIMITS.md` for details
+   - **Rate limit exceeded**:
      - Wait 5-10 minutes and try again
      - Check your token's rate limit: `curl -H "Authorization: token YOUR_TOKEN" https://api.github.com/rate_limit`
      - Increase poll interval: `export NOTES_QUEUE_POLL_SECONDS="30"`
@@ -576,11 +579,19 @@ The Tailscale Ingress API provides a secure HTTP endpoint for creating notes wit
      -d '{"title": "Test", "body": "Test content", "folder": "MCP Inbox"}'
    ```
 
-See `TAILSCALE_INGRESS_GUIDE.md` for complete documentation, including:
-- Setup instructions
-- iOS Shortcut integration
-- API reference
-- Troubleshooting
+**API Endpoints:**
+- `GET /health` - Health check
+- `POST /notes` - Create a note (requires `X-Notes-MCP-Key` header if `NOTES_MCP_INGRESS_KEY` is set)
+
+**Request format:**
+```json
+{
+  "title": "Note Title",
+  "body": "Note content",
+  "folder": "MCP Inbox",
+  "account": "iCloud"
+}
+```
 
 ## Notes Export
 
@@ -610,7 +621,7 @@ python3 -m notes_mcp.export_notes --since-days 7 --max-notes 100
 python3 -m notes_mcp.export_notes --format sqlite --output .data/notes.db
 ```
 
-Output files are saved to `.data/` directory (gitignored). See `TAILSCALE_INGRESS_GUIDE.md` for more details.
+Output files are saved to `.data/` directory (gitignored).
 
 ## Development
 
@@ -620,18 +631,14 @@ Output files are saved to `.data/` directory (gitignored). See `TAILSCALE_INGRES
 notes_mcp/
 ├── pyproject.toml                    # Project configuration
 ├── README.md                          # This file
-├── README_WORKER.md                   # Worker quick start guide
-├── TAILSCALE_INGRESS_GUIDE.md        # Ingress API guide
-├── QUICK_START_INGRESS.md            # Quick start for ingress
-├── SERVICE_SETUP.md                   # Service setup guide
-├── SECURITY_REVIEW.md                 # Security documentation
-├── GIST_TEMPLATE.md                   # Gist setup template
+├── start_worker.sh.example            # Configuration template
+├── start_ingress.sh.example           # Ingress template
 ├── setup_service.sh                   # Worker service setup
-├── start_ingress.sh                   # Ingress startup script
 ├── com.notes-mcp.worker.plist        # Worker launchd config
 ├── scripts/                           # Helper scripts
 │   ├── setup-tailscale-serve.sh      # Tailscale setup
-│   ├── get-tailscale-hostname.sh     # Hostname helper
+│   ├── setup-funnel.sh               # Funnel setup
+│   ├── generate-ingress-key.sh       # Key generation
 │   ├── install-ingress-service.sh    # Ingress installer
 │   ├── start-notes-mcp-ingress.sh    # Ingress startup
 │   └── smoke_test.sh                 # Smoke test
