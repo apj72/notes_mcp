@@ -31,24 +31,24 @@ def get_notes_from_applescript(
     return _read_notes_simple()
 
 
-def _read_notes_simple() -> list[dict[str, Any]]:
+def _read_notes_simple(all_folders: bool = False) -> list[dict[str, Any]]:
     """
     Read notes using a simpler AppleScript approach with delimiters.
+    
+    Args:
+        all_folders: If True, export all folders regardless of allowlist. If False, only allowed folders.
     """
-    allowed_folders = get_allowed_folders()
-    folder_list = ",".join([f'"{f}"' for f in allowed_folders])
-
-    applescript = f"""
-    tell application "Notes"
-        set outputLines to {{}}
-        
-        set accountsToProcess to {{"iCloud", "On My Mac"}}
-        repeat with accountName in accountsToProcess
-            try
-                set targetAccount to account accountName
-                repeat with targetFolder in folders of targetAccount
-                    set folderName to name of targetFolder
-                    
+    if all_folders:
+        # Export all folders - no filtering
+        folder_filter_script = """
+                    -- Export all folders
+                    set folderAllowed to true
+        """
+    else:
+        # Filter by allowed folders only
+        allowed_folders = get_allowed_folders()
+        folder_list = ",".join([f'"{f}"' for f in allowed_folders])
+        folder_filter_script = f"""
                     -- Check if folder is allowed
                     set folderAllowed to false
                     if folderName is "MCP Inbox" then
@@ -61,6 +61,19 @@ def _read_notes_simple() -> list[dict[str, Any]]:
                             end if
                         end repeat
                     end if
+        """
+
+    applescript = f"""
+    tell application "Notes"
+        set outputLines to {{}}
+        
+        set accountsToProcess to {{"iCloud", "On My Mac"}}
+        repeat with accountName in accountsToProcess
+            try
+                set targetAccount to account accountName
+                repeat with targetFolder in folders of targetAccount
+                    set folderName to name of targetFolder
+                    {folder_filter_script}
                     
                     if folderAllowed then
                         repeat with noteItem in notes of targetFolder
@@ -134,6 +147,58 @@ def _read_notes_simple() -> list[dict[str, Any]]:
         return []
 
 
+def _mark_duplicates(notes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Mark duplicate notes based on title and body similarity.
+    
+    Args:
+        notes: List of note dictionaries
+        
+    Returns:
+        List of notes with 'is_duplicate' and 'duplicate_group' fields added
+    """
+    # Normalize text for comparison (lowercase, strip whitespace)
+    def normalize(text: str) -> str:
+        return text.lower().strip() if text else ""
+    
+    # Group notes by normalized title+body
+    seen = {}
+    duplicate_groups = {}
+    group_id = 0
+    
+    for note in notes:
+        title = normalize(note.get("title", ""))
+        body = normalize(note.get("body", ""))
+        key = f"{title}|{body[:100]}"  # Use first 100 chars of body for comparison
+        
+        if key in seen:
+            # This is a duplicate
+            note["is_duplicate"] = True
+            note["duplicate_group"] = seen[key]
+            if seen[key] not in duplicate_groups:
+                duplicate_groups[seen[key]] = []
+            duplicate_groups[seen[key]].append(note["id"])
+        else:
+            # First occurrence
+            group_id += 1
+            note["is_duplicate"] = False
+            note["duplicate_group"] = group_id
+            seen[key] = group_id
+            duplicate_groups[group_id] = [note["id"]]
+    
+    # Add duplicate count to each note
+    for note in notes:
+        group = note.get("duplicate_group")
+        if group and group in duplicate_groups:
+            note["duplicate_count"] = len(duplicate_groups[group])
+    
+    duplicate_count = sum(1 for n in notes if n.get("is_duplicate", False))
+    if duplicate_count > 0:
+        print(f"Found {duplicate_count} duplicate notes across {len(duplicate_groups)} groups", file=sys.stderr)
+    
+    return notes
+
+
 def filter_notes_by_date(
     notes: list[dict[str, Any]], since_days: int
 ) -> list[dict[str, Any]]:
@@ -200,6 +265,12 @@ def export_to_jsonl(
             if include_body:
                 export_note["body"] = note.get("body", "")
 
+            # Include duplicate information if present
+            if "is_duplicate" in note:
+                export_note["is_duplicate"] = note["is_duplicate"]
+                export_note["duplicate_group"] = note.get("duplicate_group")
+                export_note["duplicate_count"] = note.get("duplicate_count", 1)
+
             # Extract tags from title prefixes (e.g., [WORK], [AI])
             title = note.get("title", "")
             tags = []
@@ -241,6 +312,9 @@ def export_to_sqlite(
                 modified_at TEXT,
                 body TEXT,
                 tags TEXT,
+                is_duplicate INTEGER DEFAULT 0,
+                duplicate_group INTEGER,
+                duplicate_count INTEGER DEFAULT 1,
                 exported_at TEXT NOT NULL
             )
         """
@@ -248,6 +322,7 @@ def export_to_sqlite(
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_folder ON notes_export(folder)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_modified_at ON notes_export(modified_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_duplicate ON notes_export(is_duplicate, duplicate_group)")
 
         for note in notes:
             # Extract tags
@@ -261,8 +336,8 @@ def export_to_sqlite(
             conn.execute(
                 """
                 INSERT OR REPLACE INTO notes_export
-                (id, title, folder, account, created_at, modified_at, body, tags, exported_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, title, folder, account, created_at, modified_at, body, tags, is_duplicate, duplicate_group, duplicate_count, exported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     note["id"],
@@ -273,6 +348,9 @@ def export_to_sqlite(
                     note.get("modified_at", ""),
                     note.get("body", "") if include_body else None,
                     json.dumps(tags) if tags else None,
+                    1 if note.get("is_duplicate", False) else 0,
+                    note.get("duplicate_group"),
+                    note.get("duplicate_count", 1),
                     datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 ),
             )
@@ -297,7 +375,7 @@ def main() -> None:
         "--max-notes",
         type=int,
         default=500,
-        help="Maximum number of notes to export (default: 500)",
+        help="Maximum number of notes to export (default: 500, use 0 for unlimited when --all-folders)",
     )
     parser.add_argument(
         "--include-body",
@@ -315,6 +393,16 @@ def main() -> None:
         type=Path,
         help="Output file path (default: .data/notes_export.jsonl or .data/notes_export.db)",
     )
+    parser.add_argument(
+        "--all-folders",
+        action="store_true",
+        help="Export all folders, not just allowed folders (default: False, only allowed folders)",
+    )
+    parser.add_argument(
+        "--find-duplicates",
+        action="store_true",
+        help="Detect and mark duplicate notes based on title and body similarity",
+    )
 
     args = parser.parse_args()
 
@@ -324,7 +412,9 @@ def main() -> None:
 
     # Read notes from Apple Notes
     print("Reading notes from Apple Notes...", file=sys.stderr)
-    notes = _read_notes_simple()
+    if args.all_folders:
+        print("Exporting ALL folders (not just allowed folders)", file=sys.stderr)
+    notes = _read_notes_simple(all_folders=args.all_folders)
 
     if not notes:
         print("No notes found or error reading notes", file=sys.stderr)
@@ -336,13 +426,25 @@ def main() -> None:
     # For now, we'll rely on max-notes limit and let user filter by date manually if needed
     # notes = filter_notes_by_date(notes, args.since_days)  # TODO: Implement proper date parsing
 
-    # Limit number of notes
-    if len(notes) > args.max_notes:
+    # Limit number of notes (unless exporting all folders, then respect max-notes if set)
+    if not args.all_folders and len(notes) > args.max_notes:
         print(
             f"Limiting to {args.max_notes} most recent notes (use --max-notes to increase)",
             file=sys.stderr,
         )
         notes = notes[: args.max_notes]
+    elif args.all_folders and args.max_notes > 0 and len(notes) > args.max_notes:
+        print(
+            f"Warning: Found {len(notes)} notes but limiting to {args.max_notes} (use --max-notes 0 for unlimited)",
+            file=sys.stderr,
+        )
+        notes = notes[: args.max_notes]
+    elif args.all_folders and args.max_notes == 0:
+        print(f"Exporting all {len(notes)} notes (unlimited)", file=sys.stderr)
+    
+    # Detect duplicates if requested
+    if args.find_duplicates:
+        notes = _mark_duplicates(notes)
 
     # Determine output path
     if args.output:

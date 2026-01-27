@@ -1,6 +1,6 @@
 # Notes MCP Server
 
-A comprehensive system for creating and managing notes in Apple Notes on macOS. This project provides three main components:
+A comprehensive system for creating and managing notes in Apple Notes on macOS. This project provides these main components:
 
 1. **MCP Server** - Direct MCP (Model Context Protocol) server for creating notes via stdio/JSON-RPC
 2. **Pull Worker** - Background service that processes note creation jobs from a GitHub Gist queue
@@ -604,21 +604,35 @@ The export tool allows you to read and export Apple Notes content locally for se
 - **Multiple formats** - Export to SQLite or JSONL
 - **Filtering** - Filter by date, limit count, include/exclude bodies
 - **Tag extraction** - Automatically extracts tags from title prefixes (e.g., `[WORK]`)
+- **All folders** - Export all notes regardless of folder allowlist
+- **Duplicate detection** - Identify duplicate notes based on title and body similarity
 
 ### Usage
 
 ```bash
-# Export metadata only (default)
+# Export metadata only from allowed folders (default)
 python3 -m notes_mcp.export_notes
 
-# Export with bodies
-python3 -m notes_mcp.export_notes --include-body
+# Export ALL notes from ALL folders (for organization/cleanup)
+python3 -m notes_mcp.export_notes --all-folders --max-notes 0 --include-body
 
-# Export recent notes only
-python3 -m notes_mcp.export_notes --since-days 7 --max-notes 100
+# Export with duplicate detection
+python3 -m notes_mcp.export_notes --all-folders --find-duplicates --include-body
 
-# Export to SQLite
-python3 -m notes_mcp.export_notes --format sqlite --output .data/notes.db
+# Export to SQLite for analysis
+python3 -m notes_mcp.export_notes --all-folders --format sqlite --include-body --find-duplicates
+```
+
+### Organizing and Cleaning Notes
+
+To organize all your notes and find duplicates:
+
+```bash
+# Export all notes with bodies and duplicate detection
+python3 -m notes_mcp.export_notes --all-folders --max-notes 0 --include-body --find-duplicates --format sqlite
+
+# Then query the SQLite database
+sqlite3 .data/notes_export.db "SELECT * FROM notes_export WHERE is_duplicate = 1 ORDER BY duplicate_group, modified_at"
 ```
 
 Output files are saved to `.data/` directory (gitignored).

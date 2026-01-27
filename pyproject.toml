@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 notes-mcp-server = "notes_mcp.server:main"
+notes-mcp-export = "notes_mcp.export_notes:main"
 
 [project.optional-dependencies]
 dev = [

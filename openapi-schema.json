@@ -1,0 +1,113 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Notes MCP API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://ajoyce-mac.taila02178.ts.net"
+    }
+  ],
+  "paths": {
+    "/notes": {
+      "post": {
+        "operationId": "create_note",
+        "summary": "Create a note in Apple Notes",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "body"],
+                "additionalProperties": false,
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "Note title (max 200 characters)",
+                    "maxLength": 200
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Note content (max 50,000 characters)",
+                    "maxLength": 50000
+                  },
+                  "folder": {
+                    "type": "string",
+                    "enum": ["MCP Inbox", "RedHat", "Personal"],
+                    "default": "MCP Inbox",
+                    "description": "Folder name"
+                  },
+                  "account": {
+                    "type": "string",
+                    "enum": ["iCloud", "On My Mac"],
+                    "default": "iCloud",
+                    "description": "Account name"
+                  }
+                }
+              },
+              "example": {
+                "title": "Meeting Notes - Project Review",
+                "body": "Discussed project timeline and deliverables.",
+                "folder": "RedHat",
+                "account": "iCloud"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Note queued successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string"
+                    },
+                    "job_id": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "folder": {
+                      "type": "string"
+                    },
+                    "account": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "example": {
+                  "status": "queued",
+                  "job_id": "abc123def456",
+                  "message": "Note creation job enqueued successfully",
+                  "folder": "RedHat",
+                  "account": "iCloud"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Notes-MCP-Key"
+      }
+    },
+    "schemas": {}
+  }
+}

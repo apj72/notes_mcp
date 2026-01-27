@@ -1,0 +1,78 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Notes MCP API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://YOUR-MACHINE-NAME.tailscale.ts.net"
+    }
+  ],
+  "paths": {
+    "/notes": {
+      "post": {
+        "operationId": "create_note",
+        "summary": "Create a note in Apple Notes",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "body"],
+                "additionalProperties": false,
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "body": {
+                    "type": "string",
+                    "maxLength": 50000
+                  },
+                  "folder": {
+                    "type": "string",
+                    "enum": ["MCP Inbox", "Work", "Personal"],
+                    "default": "MCP Inbox"
+                  },
+                  "account": {
+                    "type": "string",
+                    "enum": ["iCloud", "On My Mac"],
+                    "default": "iCloud"
+                  }
+                }
+              },
+              "example": {
+                "title": "Meeting Notes",
+                "body": "Project discussion",
+                "folder": "MCP Inbox",
+                "account": "iCloud"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Notes-MCP-Key"
+      }
+    },
+    "schemas": {}
+  }
+}

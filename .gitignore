@@ -52,6 +52,7 @@ start_ingress.sh
 *.env.local
 *.secret
 *.key
+gpt_action.json
 
 # Template files are safe to commit (they contain placeholders)
 # start_worker.sh.example
@@ -67,9 +68,6 @@ docs/internal/
 # Q&A and troubleshooting documentation (created as responses to questions)
 SECRETS.md
 CHANGES_SUMMARY.md
-CHATGPT_SETUP.md
-QUICK_CUSTOM_GPT_SETUP.md
-CUSTOM_INSTRUCTIONS_TEXT.md
 QUICK_START_INGRESS.md
 README_WORKER.md
 SERVICE_SETUP.md
@@ -77,15 +75,22 @@ SECURITY_REVIEW.md
 TAILSCALE_INGRESS_GUIDE.md
 GIST_TEMPLATE.md
 docs/ACCESS_WITHOUT_TAILSCALE.md
-docs/CHATGPT_BROWSER_ACCESS.md
-docs/CHATGPT_CUSTOM_INSTRUCTIONS.md
-docs/CUSTOM_GPT_SETUP_FOR_AUTOMATION.md
 docs/SERVICE_HOSTNAME_DNS_FIX.md
 docs/TAILSCALE_SERVICES_UI_SETUP.md
 docs/TAILSCALE_ADMIN_CONSOLE_SETUP.md
 docs/TAILSCALE_ACL_TROUBLESHOOTING.md
 docs/TAILSCALE_CONNECTION_FIX.md
 docs/TAILSCALE_ADMIN_CONSOLE_CONFIG.md
+
+# ChatGPT/Custom GPT documentation (duplicates moved to docs/internal/)
+# Keep only CUSTOM_GPT_CONFIG.md as the main guide
+CHATGPT_SETUP.md
+QUICK_CUSTOM_GPT_SETUP.md
+CUSTOM_INSTRUCTIONS_TEXT.md
+CUSTOM_GPT_TROUBLESHOOTING.md
+docs/CHATGPT_BROWSER_ACCESS.md
+docs/CHATGPT_CUSTOM_INSTRUCTIONS.md
+docs/CUSTOM_GPT_SETUP_FOR_AUTOMATION.md
 
 # Diagnostic/troubleshooting scripts (Q&A responses)
 scripts/diagnose-tailscale-connection.sh
