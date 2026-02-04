@@ -68,7 +68,7 @@ com.notes-mcp.*.plist
 # Internal documentation and helper files (Q&A, development notes, test scripts)
 docs/internal/
 
-# Q&A and troubleshooting documentation (created as responses to questions)
+# Q&A and troubleshooting documentation
 SECRETS.md
 CHANGES_SUMMARY.md
 QUICK_START_INGRESS.md
@@ -85,7 +85,7 @@ docs/TAILSCALE_ACL_TROUBLESHOOTING.md
 docs/TAILSCALE_CONNECTION_FIX.md
 docs/TAILSCALE_ADMIN_CONSOLE_CONFIG.md
 
-# ChatGPT/Custom GPT documentation (duplicates moved to docs/internal/)
+
 # Keep only CUSTOM_GPT_CONFIG.md as the main guide
 CHATGPT_SETUP.md
 QUICK_CUSTOM_GPT_SETUP.md

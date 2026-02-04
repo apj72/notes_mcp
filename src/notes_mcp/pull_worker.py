@@ -32,6 +32,7 @@ from .security import (
 DEFAULT_POLL_SECONDS = 60  # Poll once per minute (reduces API calls)
 DEFAULT_QUEUE_FILENAME = "queue.jsonl"
 DEFAULT_RESULTS_FILENAME = "results.jsonl"
+DEFAULT_GEM_INBOX_FILENAME = "notes_queue.json"
 DEFAULT_DB_PATH = Path.home() / ".notes-mcp-queue" / "worker.sqlite3"
 DEFAULT_MAX_JOB_AGE_SECONDS = 24 * 60 * 60  # 24 hours
 MAX_PROCESSED_JOBS_TO_KEEP = 5000
@@ -520,6 +521,59 @@ def validate_job_age(job: dict[str, Any]) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def parse_gem_inbox_line(line: str) -> Optional[dict[str, Any]]:
+    """
+    Parse a notes_queue.json line (unsigned JSON from Gemini Gem) into a job dict for execute_job.
+
+    Expected JSON: {"title":"...","body":"...","folder":"...","account":"...","tags":[...]}
+    No job_id, created_at, tool, sig - worker assigns synthetic job_id.
+
+    Returns:
+        Job dict with job_id and args, or None if invalid.
+    """
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    title = payload.get("title")
+    body = payload.get("body")
+    if title is None or body is None or not str(title).strip():
+        return None
+    title = str(title).strip()
+    body = str(body) if body is not None else ""
+    folder = payload.get("folder")
+    if folder is not None:
+        folder = str(folder).strip() or None
+    account = payload.get("account")
+    if account is not None:
+        account = str(account).strip() or None
+    tags = payload.get("tags")
+    if tags is not None and not isinstance(tags, list):
+        tags = None
+    if tags is not None:
+        tags = [str(t).strip() for t in tags if isinstance(t, str) and str(t).strip()][:20]
+        if not tags:
+            tags = None
+    # Synthetic job_id for idempotency (hash of line so same line = same id)
+    job_id = "gem-" + hashlib.sha256(line.encode()).hexdigest()[:12]
+    return {
+        "job_id": job_id,
+        "args": {
+            "title": title,
+            "body": body,
+            "folder": folder,
+            "account": account,
+            "confirm": False,
+            "tags": tags,
+        },
+    }
+
+
 def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     """
     Execute a notes.create job using the existing internal code path.
@@ -757,6 +811,7 @@ def process_queue() -> None:
     poll_seconds = int(os.environ.get("NOTES_QUEUE_POLL_SECONDS", DEFAULT_POLL_SECONDS))
     queue_filename = os.environ.get("NOTES_QUEUE_FILENAME", DEFAULT_QUEUE_FILENAME)
     results_filename = os.environ.get("NOTES_RESULTS_FILENAME", DEFAULT_RESULTS_FILENAME)
+    gem_inbox_filename = os.environ.get("NOTES_GEM_INBOX_FILENAME", DEFAULT_GEM_INBOX_FILENAME)
     db_path = Path(os.environ.get("NOTES_QUEUE_DB", str(DEFAULT_DB_PATH)))
 
     # Initialize state database
@@ -786,6 +841,35 @@ def process_queue() -> None:
             
             # Fetch Gist files
             files = fetch_gist_files(gist_id)
+
+            # Process Gem inbox (unsigned lines from Gemini Gem) first
+            if gem_inbox_filename in files:
+                gem_content = files[gem_inbox_filename]["content"]
+                if gem_content and gem_content.strip():
+                    gem_lines = [ln for ln in gem_content.strip().split("\n") if ln.strip()]
+                    remaining_lines = []
+                    gem_processed = 0
+                    for raw_line in gem_lines:
+                        job = parse_gem_inbox_line(raw_line)
+                        if not job:
+                            remaining_lines.append(raw_line)
+                            continue
+                        job_id = job["job_id"]
+                        if is_job_processed(db_path, job_id):
+                            remaining_lines.append(raw_line)
+                            continue
+                        result = execute_job(job)
+                        if result.get("status") == "created":
+                            mark_job_processed(db_path, job_id, "created")
+                            gem_processed += 1
+                            print(f"Processed Gem inbox job {job_id}: created")
+                        else:
+                            remaining_lines.append(raw_line)
+                    if gem_processed > 0:
+                        new_gem_content = "\n".join(remaining_lines) + "\n" if remaining_lines else "# Gem inbox\n"
+                        gem_sha = files[gem_inbox_filename].get("sha")
+                        if update_gist_file(gist_id, gem_inbox_filename, new_gem_content, gem_sha):
+                            print(f"Cleared {gem_processed} Gem inbox line(s) from {gem_inbox_filename}")
 
             if queue_filename not in files:
                 print(f"Warning: Queue file '{queue_filename}' not found in Gist")
