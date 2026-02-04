@@ -70,6 +70,7 @@ def create_job(
     folder: str = None,
     account: str = None,
     confirm: bool = False,
+    tags: list = None,
 ) -> str:
     """
     Create a signed job line.
@@ -80,6 +81,7 @@ def create_job(
         folder: Target folder (optional)
         account: Target account (optional)
         confirm: Confirmation flag (optional)
+        tags: Optional list of tags; appended as hashtags to body for searchability
 
     Returns:
         JSON line string ready to paste into queue.jsonl
@@ -104,6 +106,8 @@ def create_job(
         job["args"]["account"] = account
     if confirm:
         job["args"]["confirm"] = True
+    if tags:
+        job["args"]["tags"] = tags
 
     # Compute and add signature
     sig = sign_job(job, secret)
@@ -127,6 +131,9 @@ def main() -> None:
     parser.add_argument(
         "--confirm", action="store_true", help="Include confirmation flag"
     )
+    parser.add_argument(
+        "--tags", nargs="*", help="Tags to add as hashtags (e.g. --tags work meeting)"
+    )
 
     args = parser.parse_args()
 
@@ -136,6 +143,7 @@ def main() -> None:
         folder=args.folder,
         account=args.account,
         confirm=args.confirm,
+        tags=args.tags,
     )
 
     print(job_line)

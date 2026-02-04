@@ -639,40 +639,49 @@ Output files are saved to `.data/` directory (gitignored).
 
 ## Development
 
-### Project Structure
+### Container Deployment
+
+Notes MCP can be run in Podman or Docker containers using a hybrid architecture:
+- **Container**: Runs ingress API and/or pull worker (handles HTTP, GitHub Gist, queue management)
+- **Host Bridge Service**: Runs on macOS host (handles Apple Notes via AppleScript)
+
+For deployment, see **[DEPLOYMENT.md](DEPLOYMENT.md)** for the minimum artifacts in this repo.
+
+## Project Structure
 
 ```
 notes_mcp/
 ├── pyproject.toml                    # Project configuration
-├── README.md                          # This file
-├── start_worker.sh.example            # Configuration template
-├── start_ingress.sh.example           # Ingress template
-├── setup_service.sh                   # Worker service setup
-├── com.notes-mcp.worker.plist        # Worker launchd config
-├── scripts/                           # Helper scripts
-│   ├── setup-tailscale-serve.sh      # Tailscale setup
-│   ├── setup-funnel.sh               # Funnel setup
-│   ├── generate-ingress-key.sh       # Key generation
-│   ├── install-ingress-service.sh    # Ingress installer
-│   ├── start-notes-mcp-ingress.sh    # Ingress startup
-│   └── smoke_test.sh                 # Smoke test
-├── docs/                              # Additional documentation
-│   ├── launchd/                       # Launchd configs
-│   └── TAILSCALE_ADMIN_CONSOLE_CONFIG.md
+├── README.md                         # This file
+├── DEPLOYMENT.md                     # What's needed to deploy (minimum artifacts)
+├── start_worker.sh.example           # Configuration template (copy to start_worker.sh)
+├── start_ingress.sh.example          # Ingress template (copy to start_ingress.sh)
+├── setup_service.sh                  # Worker service setup (launchd)
+├── gpt_action.json.example           # Custom GPT schema (copy to gpt_action.json)
+├── openapi-schema.json               # OpenAPI schema
+├── CUSTOM_GPT_CONFIG.md              # Custom GPT setup guide
+├── NOTE_TAGS.md                      # Tags (hashtags) feature
+├── APPLE_NOTES_FORMATTING_SUPPORT.md # HTML formatting in Notes
+├── docs/
+│   └── launchd/                      # Launchd plists (ingress, export)
 └── src/
     └── notes_mcp/
-        ├── __init__.py               # Package initialization
+        ├── __init__.py
         ├── server.py                 # MCP server (stdio)
         ├── pull_worker.py             # Queue-based worker
         ├── ingress.py                 # Tailscale ingress API
-        ├── export_notes.py           # Notes export tool
         ├── applescript.py             # AppleScript integration
-        ├── security.py                # Security utilities
-        ├── logging.py                 # Audit logging
-        ├── formatting.py              # Text normalization
-        ├── sign_job.py                # Job signing helper
-        └── enqueue_job.py             # Job enqueue helper
+        ├── bridge_client.py           # Bridge client (container)
+        ├── bridge_server.py          # Bridge server (host)
+        ├── export_notes.py            # Notes export tool
+        ├── security.py
+        ├── logging.py
+        ├── formatting.py
+        ├── sign_job.py
+        └── enqueue_job.py
 ```
+
+Config files with secrets (`start_worker.sh`, `start_ingress.sh`, `gpt_action.json`, plists) are gitignored. Helper scripts, container files, and experimental docs live in `_unsynced/` (gitignored).
 
 ### Current Status
 
@@ -701,13 +710,6 @@ notes_mcp/
 - Audit logging (no secrets)
 - Input validation
 - AppleScript injection defense
-
-### Running Tests
-
-```bash
-python3 -m pip install -e ".[dev]"
-pytest
-```
 
 ## License
 

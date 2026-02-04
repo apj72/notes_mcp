@@ -93,6 +93,11 @@ class MCPServer:
                                         "type": "boolean",
                                         "description": "Confirmation flag (required if NOTES_MCP_REQUIRE_CONFIRM=true)",
                                     },
+                                    "tags": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Optional tags; appended as hashtags to body so notes can be searched by #tagname in Apple Notes (max 20)",
+                                    },
                                 },
                                 "required": ["title", "body"],
                             },
@@ -147,7 +152,14 @@ class MCPServer:
         folder = arguments.get("folder")
         account = arguments.get("account")
         confirm = arguments.get("confirm", False)
-        
+        tags = arguments.get("tags")
+        if tags is not None and isinstance(tags, list):
+            tags = [str(t).strip() for t in tags if isinstance(t, str) and str(t).strip()][:20]
+            if not tags:
+                tags = None
+        else:
+            tags = None
+
         # Normalize body formatting (convert literal \n to real newlines, etc.)
         # Do this BEFORE validation so validation sees the normalized body
         body = normalize_note_body(body)
@@ -206,6 +218,7 @@ class MCPServer:
             body=body,
             folder=folder,
             account=account,
+            tags=tags,
         )
 
         if not success:

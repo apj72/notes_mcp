@@ -102,6 +102,10 @@ app = FastAPI(
 )
 
 
+MAX_TAGS = 20
+MAX_TAG_LENGTH = 50
+
+
 class NoteCreateRequest(BaseModel):
     """Request model for creating a note."""
 
@@ -110,6 +114,7 @@ class NoteCreateRequest(BaseModel):
     folder: Optional[str] = Field(None, max_length=200)
     account: Optional[str] = Field(None, pattern="^(iCloud|On My Mac)$")
     confirm: bool = Field(default=False)
+    tags: Optional[list[str]] = Field(None, max_length=MAX_TAGS)
 
     @field_validator("title", "body")
     @classmethod
@@ -118,6 +123,20 @@ class NoteCreateRequest(BaseModel):
         if "\x00" in v:
             raise ValueError("Title and body cannot contain null bytes")
         return v
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: Optional[list]) -> Optional[list[str]]:
+        """Ensure tags are strings, max length per tag, max count."""
+        if v is None:
+            return None
+        if not isinstance(v, list):
+            return None
+        out = []
+        for t in v[:MAX_TAGS]:
+            if isinstance(t, str) and t.strip():
+                out.append(t.strip()[:MAX_TAG_LENGTH])
+        return out if out else None
 
 
 @app.get("/health")
@@ -221,6 +240,7 @@ async def create_note(
             folder=folder,
             account=account,
             confirm=request.confirm,
+            tags=request.tags,
         )
     except Exception as e:
         raise HTTPException(

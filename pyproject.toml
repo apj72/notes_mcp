@@ -14,6 +14,7 @@ dependencies = [
 [project.scripts]
 notes-mcp-server = "notes_mcp.server:main"
 notes-mcp-export = "notes_mcp.export_notes:main"
+notes-mcp-bridge = "notes_mcp.bridge_server:main"
 
 [project.optional-dependencies]
 dev = [

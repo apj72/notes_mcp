@@ -44,6 +44,10 @@ Rules:
 - If required information (title or body) is missing or ambiguous, ask ONE clarifying question maximum
 - After a successful API call (202 response), confirm: "Note queued successfully. It will appear in Apple Notes within 60 seconds."
 - If API returns non-202 status, surface the error message and suggest checking /health endpoint and funnel/worker logs
+
+HTML formatting (browser-based Custom GPT): You may send HTML in the body field for rich formatting. If the body starts with "<" and contains ">", the API treats it as HTML and Apple Notes will render it (bold, italic, lists, links, colors, tables, etc.). Use plain text when the user does not ask for formatting. Supported: <strong>, <em>, <u>, <s>, <p>, <h1>-<h6>, <ul>/<ol>/<li>, <a href="...">, <table>, <code>, <pre>, <hr>, <span style="...">, font-size/color/background-color. Avoid <br> (use separate <p> tags for line breaks). Blockquotes (<blockquote>) are not supported.
+
+Tags: You may send an optional "tags" array (e.g. ["work", "meeting"]). Tags are appended to the note as hashtags (#work #meeting) so the user can search by #tagname in Apple Notes. Use tags when the user mentions categories or wants to find the note later by topic.
 ```
 
 ## Step 3: Add Action (API Integration)
@@ -107,7 +111,7 @@ Paste this entire schema into the schema editor:
                   },
                   "body": {
                     "type": "string",
-                    "description": "Note content (max 50,000 characters)",
+                    "description": "Note content: plain text or HTML. If body starts with '<' and contains tags, rendered as HTML (bold, lists, links, etc.). Otherwise plain text with line breaks. See doc for HTML formatting.",
                     "maxLength": 50000
                   },
                   "folder": {
@@ -121,6 +125,12 @@ Paste this entire schema into the schema editor:
                     "enum": ["iCloud", "On My Mac"],
                     "default": "iCloud",
                     "description": "Account name"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "maxItems": 20,
+                    "description": "Optional tags; appended as hashtags so notes can be searched by #tagname in Apple Notes"
                   }
                 }
               },
@@ -228,6 +238,53 @@ Paste this entire schema into the schema editor:
    - **"Public"** - Listed in GPT store (not recommended for personal use)
 3. Click **"Confirm"**
 
+## Using HTML for rich formatting (browser-based Custom GPT)
+
+The API accepts **HTML in the note body**. When the body starts with `<` and contains `>`, it is rendered as rich text in Apple Notes.
+
+### Enabling HTML in your Custom GPT
+
+The OpenAPI schema already describes that `body` can be plain text or HTML. Add this to your GPT **Instructions** (see Step 2) so the model uses HTML when appropriate:
+
+- *"You may send HTML in the body field for rich formatting. If the body starts with '<' and contains '>', the API treats it as HTML. Use <strong>, <em>, <ul>/<li>, <a href>, <table>, <code>, <pre>, <hr>, headings, and inline styles for colors/fonts. Use separate <p> tags for line breaks (avoid <br>). Blockquotes are not supported."*
+
+### What works in Apple Notes
+
+| Formatting | HTML | Works |
+|------------|------|-------|
+| Bold, italic, underline, strikethrough | `<strong>`, `<em>`, `<u>`, `<s>` | ✅ |
+| Font sizes, families, colors | `style="font-size:18px"`, `color:red`, etc. | ✅ |
+| Text alignment | `text-align:center`, `right`, `justify` | ✅ |
+| Bullet and numbered lists | `<ul>`, `<ol>`, `<li>` (including nested) | ✅ |
+| Links | `<a href="https://...">text</a>` | ✅ |
+| Tables | `<table>`, `<tr>`, `<th>`, `<td>` | ✅ |
+| Code | `<code>`, `<pre>` | ✅ |
+| Horizontal rules | `<hr>` | ✅ |
+| Headings | `<h1>`–`<h6>` | ✅ |
+| Line breaks | Use separate `<p>...</p>` per line | ✅ |
+| Blockquotes | `<blockquote>` | ❌ |
+
+Full details: see `APPLE_NOTES_FORMATTING_SUPPORT.md`.
+
+### Example: formatted note via Custom GPT
+
+User: *"Save a note titled 'Meeting recap' with a bullet list of action items and bold the names."*
+
+The GPT can send a body like:
+
+```html
+<p><strong>Action items</strong></p>
+<ul>
+<li>Alice: send design mockups by Friday</li>
+<li>Bob: update API docs</li>
+<li>Carol: schedule follow-up</li>
+</ul>
+```
+
+The note will appear in Apple Notes with bold heading and bullet list.
+
+---
+
 ## Usage
 
 Once configured, you can use your Custom GPT like this:
@@ -235,9 +292,10 @@ Once configured, you can use your Custom GPT like this:
 - "Create a note about the meeting with John tomorrow"
 - "Save this to my RedHat folder: [content]"
 - "Make a note titled 'Project Ideas' with the following: [ideas]"
+- "Create a note with a bullet list and bold the key points" (GPT can use HTML body)
 
 The GPT will automatically:
-1. Format your request into the API call
+1. Format your request into the API call (plain text or HTML body when appropriate)
 2. Include the authentication key
 3. Call the API
 4. Confirm when the note is created

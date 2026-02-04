@@ -20,6 +20,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Unsynced folder (testing, container, experimental scripts, fix docs)
+_unsynced/
+
 # Virtual environments
 venv/
 env/

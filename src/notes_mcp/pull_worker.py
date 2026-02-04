@@ -15,6 +15,7 @@ from typing import Any, Optional
 import requests
 
 from .applescript import create_note
+from .bridge_client import create_note_via_bridge, get_bridge_url
 from .formatting import normalize_note_body
 from .logging import log_action
 from .security import (
@@ -537,7 +538,16 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
     folder = args.get("folder")
     account = args.get("account")
     confirm = args.get("confirm", False)
-    
+    tags = args.get("tags")
+
+    # Normalize tags: ensure list of strings
+    if tags is not None and not isinstance(tags, list):
+        tags = None
+    if tags is not None:
+        tags = [str(t).strip() for t in tags if isinstance(t, str) and str(t).strip()][:20]
+        if not tags:
+            tags = None
+
     # Normalize body formatting (convert literal \n to real newlines, etc.)
     body = normalize_note_body(body)
 
@@ -663,13 +673,26 @@ def execute_job(job: dict[str, Any]) -> dict[str, Any]:
             "reason": error_msg,
         }
 
-    # Execute the note creation using existing internal function
-    success, error_msg, result = create_note(
-        title=title,
-        body=body,
-        folder=folder,
-        account=account,
-    )
+    # Execute the note creation
+    # Use bridge service if configured (for containerized deployments), otherwise use direct AppleScript
+    bridge_url = get_bridge_url()
+    if bridge_url:
+        success, error_msg, result = create_note_via_bridge(
+            title=title,
+            body=body,
+            folder=folder,
+            account=account,
+            tags=tags,
+        )
+    else:
+        # Direct AppleScript (for native macOS deployment)
+        success, error_msg, result = create_note(
+            title=title,
+            body=body,
+            folder=folder,
+            account=account,
+            tags=tags,
+        )
 
     if not success:
         log_action(
@@ -924,9 +947,13 @@ def process_queue() -> None:
                                     remaining_lines.append(line)
 
                             # Update queue with remaining jobs
-                            new_queue_content = "\n".join(remaining_lines)
+                            # IMPORTANT: GitHub Gists delete files with empty content!
+                            # Always keep at least a comment to prevent file deletion
                             if remaining_lines:
-                                new_queue_content += "\n"
+                                new_queue_content = "\n".join(remaining_lines) + "\n"
+                            else:
+                                # Keep file alive with a comment (prevents GitHub from deleting it)
+                                new_queue_content = "# Notes MCP Job Queue\n# This file is automatically maintained by the pull worker.\n# Add signed job lines below.\n"
 
                             success = update_gist_file(gist_id, queue_filename, new_queue_content, queue_sha)
                             if success:

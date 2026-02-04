@@ -127,8 +127,9 @@ sudo tailscale serve --bg --http=8443 http://127.0.0.1:8443
 4. Test manually:
    ```bash
    cd /path/to/notes_mcp
-   ./scripts/start-notes-mcp-ingress.sh
+   ./start_ingress.sh
    ```
+   (Use the same `start_ingress.sh` you use for the launchd plist; copy from `start_ingress.sh.example` if needed.)
 
 ### Port Already in Use
 
@@ -140,6 +141,6 @@ If port 8443 is already in use:
 ### Permission Errors
 
 Ensure:
-- Scripts are executable: `chmod +x scripts/*.sh`
+- `start_ingress.sh` is executable: `chmod +x start_ingress.sh`
 - Python has Automation permissions for Notes
 - Tailscale has necessary permissions
