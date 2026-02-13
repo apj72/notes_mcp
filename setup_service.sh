@@ -1,33 +1,47 @@
 #!/bin/bash
-# Setup script for notes-mcp pull worker as a macOS launchd service
+# Setup script for notes-mcp pull worker as a macOS launchd service.
+# Usage: ./setup_service.sh [INSTALL_DIR]  (default: repo root)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PLIST_NAME="com.notes-mcp.worker.plist"
+# When setup_service.sh is in repo root, SCRIPT_DIR is the repo
+REPO_DIR="${SCRIPT_DIR}"
+INSTALL_DIR="${1:-$REPO_DIR}"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-PLIST_SOURCE="$SCRIPT_DIR/$PLIST_NAME"
-PLIST_DEST="$LAUNCH_AGENTS_DIR/$PLIST_NAME"
+PLIST_DEST="$LAUNCH_AGENTS_DIR/com.notes-mcp.worker.plist"
 
 echo "Setting up notes-mcp pull worker as a background service..."
 echo ""
 
-# Check if start_worker.sh exists and is executable
-if [ ! -f "$SCRIPT_DIR/start_worker.sh" ]; then
-    echo "Error: start_worker.sh not found in $SCRIPT_DIR"
+# Prefer scripts/start_worker.sh (Keychain-based); fallback to repo root start_worker.sh
+START_SCRIPT="$REPO_DIR/scripts/start_worker.sh"
+if [ ! -f "$START_SCRIPT" ]; then
+    START_SCRIPT="$REPO_DIR/start_worker.sh"
+fi
+if [ ! -f "$START_SCRIPT" ]; then
+    echo "Error: start_worker.sh not found in $REPO_DIR or $REPO_DIR/scripts"
     exit 1
 fi
 
-chmod +x "$SCRIPT_DIR/start_worker.sh"
+chmod +x "$START_SCRIPT"
 echo "✓ Made start_worker.sh executable"
 
-# Create LaunchAgents directory if it doesn't exist
 mkdir -p "$LAUNCH_AGENTS_DIR"
-echo "✓ Created LaunchAgents directory"
-
-# Copy plist file
-cp "$PLIST_SOURCE" "$PLIST_DEST"
-echo "✓ Copied plist to $PLIST_DEST"
+TEMPLATE="$REPO_DIR/com.notes-mcp.worker.plist.template"
+if [ -f "$TEMPLATE" ]; then
+    sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" "$TEMPLATE" > "$PLIST_DEST"
+    echo "✓ Installed plist to $PLIST_DEST"
+else
+    # Legacy: copy plist if it exists (no template)
+    if [ -f "$REPO_DIR/com.notes-mcp.worker.plist" ]; then
+        cp "$REPO_DIR/com.notes-mcp.worker.plist" "$PLIST_DEST"
+        echo "✓ Copied plist to $PLIST_DEST"
+    else
+        echo "Error: neither $TEMPLATE nor com.notes-mcp.worker.plist found"
+        exit 1
+    fi
+fi
 
 # Unload if already loaded (try both old and new methods)
 if launchctl list | grep -q "com.notes-mcp.worker"; then

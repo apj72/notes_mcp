@@ -16,6 +16,70 @@ All components share the same security controls: authentication, rate limiting, 
 - **Apple Notes app** installed and configured
 - **Automation permissions** granted to Terminal/Python for controlling Notes (see Permissions section)
 
+## Quick install on macOS
+
+On a Mac you can install the worker, Python env, and Tailscale ingress with one command. Secrets are stored in **macOS Keychain** (no plain-text files).
+
+**One command (installs to `~/notes_mcp`):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/apj72/notes_mcp/main/scripts/install_macos.sh | zsh
+```
+
+Or run locally after cloning:
+
+```bash
+zsh scripts/install_macos.sh
+```
+
+**What to expect:**
+
+1. **Pre-flight:** macOS and Xcode Command Line Tools are checked. If CLI tools are missing, you’ll be prompted to install them; re-run the installer afterward.
+2. **Prerequisites:** Homebrew is installed if needed, then `git`, `python@3.11`, and (unless skipped) Tailscale.
+3. **Repo:** If you used the curl one-liner, the script clones the repo to `~/notes_mcp` and continues from there.
+4. **Secrets:** You’ll be prompted once for:
+   - **GitHub PAT** (Personal Access Token with `gist` scope)
+   - **Gist ID** (your queue Gist)
+   - An MCP token is generated and stored in Keychain; the installer prints it once (store it for your MCP client).
+5. **Tailscale:** If Tailscale isn’t logged in, the installer will tell you to open the Tailscale app and log in, then re-run with `--skip-brew` (or finish Tailscale setup and run again).
+6. **Services:** The worker and ingress launchd agents are installed and started.
+
+**Options:**
+
+- `--install-dir <path>` — Install to a different directory (default: `~/notes_mcp`).
+- `--force` — Overwrite Keychain entries and reinstall.
+- `--skip-tailscale` — Install the worker only; skip Tailscale and ingress.
+- `--skip-brew` — Assume Homebrew and dependencies are already installed.
+- `--non-interactive` — Fail if required secrets are missing (no prompts).
+
+**Verify:**
+
+```bash
+# Worker status
+launchctl print gui/$(id -u)/com.notes-mcp.worker
+
+# Logs
+tail -f /tmp/notes-mcp-worker.out
+tail -f /tmp/notes-mcp-worker.err
+
+# Health (local)
+curl http://127.0.0.1:8443/health
+
+# Health (tailnet; use your machine’s Tailscale name)
+curl http://YOUR_TAILSCALE_NAME:8443/health
+
+# Retrieve MCP token from Keychain
+security find-generic-password -s notes_mcp_token -w
+```
+
+**Uninstall:**
+
+```bash
+zsh scripts/uninstall_macos.sh
+```
+
+This unloads the launchd services and optionally removes Keychain entries (you’ll be asked before deleting secrets).
+
 ## Installation
 
 1. Clone or download this repository:
