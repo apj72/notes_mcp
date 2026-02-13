@@ -108,10 +108,11 @@ if [[ "$SKIP_BREW" != true ]]; then
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
         eval "$(get_brew_prefix)/bin/brew shellenv"
     fi
+    # Ensure brew is on PATH (e.g. after install or in new shell)
+    eval "$(get_brew_prefix)/bin/brew shellenv" 2>/dev/null || true
     log_ok "Homebrew ready"
     brew install git
     brew install python@3.11
-    brew link --overwrite python@3.11 2>/dev/null || true
     if [[ "$SKIP_TAILSCALE" != true ]]; then
         brew install --cask tailscale 2>/dev/null || true
     fi
@@ -120,10 +121,36 @@ else
     require_cmd python3
 fi
 
-# --- Python venv ---
+# --- Python venv (must use 3.11+; pyproject.toml requires >=3.11) ---
 log_info "Setting up Python environment..."
+PYTHON311=""
+# Check fixed Homebrew paths first (re-exec'd shell often has no brew on PATH)
+for p in /opt/homebrew/opt/python@3.11/bin/python3.11 /usr/local/opt/python@3.11/bin/python3.11 \
+         /opt/homebrew/opt/python@3.12/bin/python3.12 /usr/local/opt/python@3.12/bin/python3.12; do
+    if [[ -x "$p" ]]; then
+        PYTHON311="$p"
+        break
+    fi
+done
+if [[ -z "$PYTHON311" ]] && cmd_exists brew; then
+    BREW_PREFIX="$(brew --prefix 2>/dev/null)"
+    for p in "$BREW_PREFIX/opt/python@3.11/bin/python3.11" "$BREW_PREFIX/opt/python@3.12/bin/python3.12"; do
+        if [[ -x "$p" ]]; then
+            PYTHON311="$p"
+            break
+        fi
+    done
+fi
+if [[ -z "$PYTHON311" ]]; then
+    if python3 -c 'import sys; exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        PYTHON311="python3"
+    fi
+fi
+if [[ -z "$PYTHON311" ]]; then
+    log_fatal "Python 3.11+ required (notes-mcp requires >=3.11). Install with: brew install python@3.11"
+fi
 if [[ ! -d "$REPO_DIR/.venv" ]]; then
-    python3 -m venv "$REPO_DIR/.venv"
+    "$PYTHON311" -m venv "$REPO_DIR/.venv"
 fi
 # shellcheck source=/dev/null
 . "$REPO_DIR/.venv/bin/activate"
