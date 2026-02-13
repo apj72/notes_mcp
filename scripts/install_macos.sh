@@ -132,6 +132,23 @@ for p in /opt/homebrew/opt/python@3.11/bin/python3.11 /usr/local/opt/python@3.11
         break
     fi
 done
+if [[ -z "$PYTHON311" ]]; then
+    # Try full path to brew (re-exec'd shell often has no brew on PATH)
+    for brew_cmd in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        if [[ -x "$brew_cmd" ]]; then
+            BREW_PREFIX="$("$brew_cmd" --prefix python@3.11 2>/dev/null)"
+            if [[ -n "$BREW_PREFIX" && -x "$BREW_PREFIX/bin/python3.11" ]]; then
+                PYTHON311="$BREW_PREFIX/bin/python3.11"
+                break
+            fi
+            BREW_PREFIX="$("$brew_cmd" --prefix python@3.12 2>/dev/null)"
+            if [[ -n "$BREW_PREFIX" && -x "$BREW_PREFIX/bin/python3.12" ]]; then
+                PYTHON311="$BREW_PREFIX/bin/python3.12"
+                break
+            fi
+        fi
+    done
+fi
 if [[ -z "$PYTHON311" ]] && cmd_exists brew; then
     BREW_PREFIX="$(brew --prefix 2>/dev/null)"
     for p in "$BREW_PREFIX/opt/python@3.11/bin/python3.11" "$BREW_PREFIX/opt/python@3.12/bin/python3.12"; do
@@ -148,6 +165,13 @@ if [[ -z "$PYTHON311" ]]; then
 fi
 if [[ -z "$PYTHON311" ]]; then
     log_fatal "Python 3.11+ required (notes-mcp requires >=3.11). Install with: brew install python@3.11"
+fi
+# Recreate venv if it exists but was made with Python < 3.11
+if [[ -d "$REPO_DIR/.venv" ]]; then
+    if ! "$REPO_DIR/.venv/bin/python" -c 'import sys; exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        log_info "Removing existing .venv (was Python < 3.11), recreating with 3.11+"
+        rm -rf "$REPO_DIR/.venv"
+    fi
 fi
 if [[ ! -d "$REPO_DIR/.venv" ]]; then
     "$PYTHON311" -m venv "$REPO_DIR/.venv"
