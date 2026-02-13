@@ -199,7 +199,13 @@ keychain_ensure() {
     echo -n "$prompt_msg "
     read -r val
     if [[ -z "$val" ]]; then
-        log_fatal "Empty value not allowed for $service"
+        echo ""
+        log_warn "Value cannot be empty."
+        echo -n "$prompt_msg "
+        read -r val
+    fi
+    if [[ -z "$val" ]]; then
+        log_fatal "$prompt_msg is required. Run the installer again and enter it when prompted."
     fi
     keychain_set "$service" "$val"
 }
