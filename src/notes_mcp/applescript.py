@@ -50,7 +50,8 @@ def escape_applescript_string(s: str, use_single_quotes: bool = False) -> str:
                 escaped_parts.append(f'\\{oct(ord(char))[2:].zfill(3)}')
             else:
                 escaped_parts.append(char)
-        return f"'{"".join(escaped_parts)}'"
+        joined = "".join(escaped_parts)
+        return f"'{joined}'"
     else:
         # Use double quotes - escape double quotes, backslashes, etc.
         escaped_parts = []
@@ -73,7 +74,8 @@ def escape_applescript_string(s: str, use_single_quotes: bool = False) -> str:
                 escaped_parts.append(char)
         
         # Return as quoted string
-        return f'"{"".join(escaped_parts)}"'
+        joined = "".join(escaped_parts)
+        return f'"{joined}"'
 
 
 def convert_body_to_html(body: str) -> str:
