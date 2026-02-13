@@ -21,13 +21,8 @@ if [ -f "$COMMON" ]; then
 fi
 export NOTES_MCP_ALLOWED_FOLDERS="${NOTES_MCP_ALLOWED_FOLDERS:-MCP Inbox,RedHat,Personal}"
 
-# Ensure Tailscale is running (best effort)
-if command -v tailscale >/dev/null 2>&1; then
-    if ! tailscale status >/dev/null 2>&1; then
-        echo "[notes_mcp] Tailscale not logged in. Start Tailscale and log in, then run again." >&2
-        exit 1
-    fi
-    # Tailnet-only serve (no Funnel by default)
+# Tailscale serve (optional): expose 8443 over tailnet when logged in
+if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
     tailscale serve --bg --http=8443 http://127.0.0.1:8443 2>/dev/null || true
 fi
 

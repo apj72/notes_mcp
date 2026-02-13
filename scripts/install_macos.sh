@@ -276,16 +276,11 @@ launchctl bootstrap "gui/$(id -u)" "$WORKER_PLIST_DEST" 2>/dev/null || launchctl
 launchctl kickstart -k "gui/$(id -u)/com.notes-mcp.worker" 2>/dev/null || true
 log_ok "Worker service loaded and started"
 
-# --- Ingress (Tailscale serve) ---
-if [[ "$SKIP_TAILSCALE" != true ]]; then
-    if ! tailscale status &>/dev/null; then
-        log_warn "Tailscale not logged in. Open Tailscale app, log in, then run: $0 --skip-brew --skip-tailscale"
-    else
-        log_info "Configuring Tailscale serve and ingress service..."
-        tailscale serve --bg --http=8443 http://127.0.0.1:8443 2>/dev/null || true
-        chmod +x "$REPO_DIR/scripts/start_ingress.sh"
-        INGRESS_PLIST_DEST="$LAUNCH_AGENTS/com.notes-mcp.ingress.plist"
-        cat > "$INGRESS_PLIST_DEST" << PLIST
+# --- Ingress (HTTP API on 8443; Tailscale serve optional) ---
+log_info "Installing ingress service (HTTP API on 127.0.0.1:8443)..."
+chmod +x "$REPO_DIR/scripts/start_ingress.sh"
+INGRESS_PLIST_DEST="$LAUNCH_AGENTS/com.notes-mcp.ingress.plist"
+cat > "$INGRESS_PLIST_DEST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -310,10 +305,14 @@ if [[ "$SKIP_TAILSCALE" != true ]]; then
 </dict>
 </plist>
 PLIST
-        launchctl bootout "gui/$(id -u)/com.notes-mcp.ingress" 2>/dev/null || true
-        launchctl bootstrap "gui/$(id -u)" "$INGRESS_PLIST_DEST" 2>/dev/null || launchctl load "$INGRESS_PLIST_DEST"
-        log_ok "Ingress service loaded"
-    fi
+launchctl bootout "gui/$(id -u)/com.notes-mcp.ingress" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$INGRESS_PLIST_DEST" 2>/dev/null || launchctl load "$INGRESS_PLIST_DEST"
+log_ok "Ingress service loaded"
+if [[ "$SKIP_TAILSCALE" != true ]] && tailscale status &>/dev/null; then
+    tailscale serve --bg --http=8443 http://127.0.0.1:8443 2>/dev/null || true
+    log_ok "Tailscale serve configured (tailnet access to :8443)"
+elif [[ "$SKIP_TAILSCALE" != true ]]; then
+    log_warn "Tailscale not logged in. Local API works at http://127.0.0.1:8443; log in and run: tailscale serve --bg --http=8443 http://127.0.0.1:8443 for tailnet access."
 fi
 
 # --- Verification output ---
