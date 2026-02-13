@@ -49,8 +49,9 @@ htmlcov/
 .env.local
 
 # Secrets and configuration files (NEVER commit these)
-start_worker.sh
-start_ingress.sh
+# Root-only (may contain secrets); scripts/start_worker.sh and scripts/start_ingress.sh are committed (Keychain-based)
+/start_worker.sh
+/start_ingress.sh
 *.env
 *.env.local
 *.secret
